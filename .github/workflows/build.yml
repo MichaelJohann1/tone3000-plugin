@@ -12,6 +12,11 @@ name: Build Plugin
 # to required reviewers if you want an admin gate before a runner starts.
 on:
   workflow_dispatch:
+    inputs:
+      mac_test_only:
+        description: Build only the macOS accessibility testing package
+        type: boolean
+        default: false
 
 # Least-privilege GITHUB_TOKEN: nothing in this workflow writes back to the
 # repo (artifact upload and the sccache/actions cache use the runtime token,
@@ -24,6 +29,7 @@ env:
 
 jobs:
   build:
+    if: ${{ !inputs.mac_test_only }}
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
     environment: builds
@@ -536,6 +542,7 @@ jobs:
   # multi-config build), and it does not honour the sccache compiler
   # launchers, so this job builds cold.
   ios-simulator:
+    if: ${{ !inputs.mac_test_only }}
     name: iOS Simulator
     runs-on: macos-14
     environment: builds
@@ -584,3 +591,55 @@ jobs:
           name: TONE3000-v${{ env.T3K_VERSION }}-ios-simulator
           path: build-ios/TONE3000-v*-ios-simulator.zip
           if-no-files-found: error
+
+  macos-testing:
+    if: ${{ inputs.mac_test_only }}
+    name: macOS accessibility testing (universal)
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      T3K_PUBLISHABLE_KEY: ${{ secrets.T3K_PUBLISHABLE_KEY }}
+      T3K_UPDATE_NOTICE: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure and build Apple Silicon and Intel
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in arm64 x86_64; do
+            cmake -S . -B "build-$arch" -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES="$arch" -DBUILD_AAX=OFF \
+              -DBUILD_CLAP=OFF -DBUILD_LV2=OFF -DT3K_BUILD_UI_TESTBED=ON
+            cmake --build "build-$arch" --config Release --parallel 3 \
+              --target TONE3000_Standalone TONE3000_VST3 TONE3000_AU UiTestbed
+          done
+      - name: Run native UI checks
+        run: ctest --test-dir build-arm64/plugin/ui/testbed --output-on-failure --timeout 240
+      - name: Merge and package universal binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash script/lipo-macos-artefacts.sh \
+            build-arm64/plugin/TONE3000_artefacts/Release \
+            build-x86_64/plugin/TONE3000_artefacts/Release \
+            build/plugin/TONE3000_artefacts/Release
+          bash script/create-pkg.sh
+          version=$(tr -d '[:space:]' < VERSION)
+          mv "build/TONE3000-v${version}.pkg" "build/TONE3000-v${version}-accessibility-macos-universal-test.pkg"
+          shasum -a 256 build/*-accessibility-macos-universal-test.pkg > build/SHA256SUMS-macos.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TONE3000-accessibility-macos-universal-test
+          path: |
+            build/*-accessibility-macos-universal-test.pkg
+            build/SHA256SUMS-macos.txt
+          if-no-files-found: error
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-accessibility-test-logs
+          path: build-arm64/plugin/ui/testbed/Testing/Temporary/*.log
+          if-no-files-found: ignore
