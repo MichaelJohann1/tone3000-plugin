@@ -1606,6 +1606,9 @@ struct DialogAccessibilityTests : juce::UnitTest {
       modal->giveAwayKeyboardFocus();
       expect(LiveScenario::until([&] { return modal->hasKeyboardFocus(true); }),
              "Active host reacquires dialog focus after native activation clears it");
+      live.window->grabKeyboardFocus();
+      expect(LiveScenario::until([&] { return modal->hasKeyboardFocus(true); }),
+             "Dialog takes focus when its parent host window holds it");
       live.window->setVisible(false);
       modal->giveAwayKeyboardFocus();
       modal->focusFirstControl();

@@ -26,7 +26,9 @@ void ModalLayer::focusFirstControl() {
 
 void ModalLayer::timerCallback() {
   refresh();
-  if (pendingFocus_ || (focusRequested_ && getCurrentlyFocusedComponent() == nullptr)) focusFirstControl();
+  const auto* focused = getCurrentlyFocusedComponent();
+  const bool hostHasFocus = focused == nullptr || focused->isParentOf(this);
+  if (pendingFocus_ || (focusRequested_ && hostHasFocus)) focusFirstControl();
 }
 
 bool ModalLayer::keyPressed(const juce::KeyPress& key) {
