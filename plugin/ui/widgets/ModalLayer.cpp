@@ -14,18 +14,19 @@ ModalLayer::ModalLayer(Backdrop backdrop) : backdrop_(std::move(backdrop)) {
 }
 
 void ModalLayer::focusFirstControl() {
+  focusRequested_ = true;
   pendingFocus_ = true;
   if (!isShowing() || getPeer() == nullptr || !getPeer()->isFocused()) return;
-  pendingFocus_ = false;
   const auto order = juce::KeyboardFocusTraverser().getAllComponents(this);
   if (order.empty()) grabKeyboardFocus();
   else order.front()->grabKeyboardFocus();
-  help::announce(getTitle() + ". " + getDescription());
+  pendingFocus_ = !hasKeyboardFocus(true);
+  if (!pendingFocus_) help::announce(getTitle() + ". " + getDescription());
 }
 
 void ModalLayer::timerCallback() {
   refresh();
-  if (pendingFocus_) focusFirstControl();
+  if (pendingFocus_ || (focusRequested_ && getCurrentlyFocusedComponent() == nullptr)) focusFirstControl();
 }
 
 bool ModalLayer::keyPressed(const juce::KeyPress& key) {

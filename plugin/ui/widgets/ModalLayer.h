@@ -32,7 +32,7 @@ public:
   void setContent(juce::Component& content);
   std::function<void()> onEscape;
   void focusFirstControl();
-  void cancelPendingFocus() { pendingFocus_ = false; }
+  void cancelPendingFocus() { pendingFocus_ = false; focusRequested_ = false; }
   bool keyPressed(const juce::KeyPress& key) override;
 
   void paint(juce::Graphics& g) override;
@@ -52,6 +52,7 @@ private:
   juce::Image blurred_;
   juce::Component* content_ = nullptr;
   bool pendingFocus_ = false;
+  bool focusRequested_ = false;
 };
 
 }  // namespace t3k::ui

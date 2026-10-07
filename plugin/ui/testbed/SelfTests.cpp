@@ -1603,6 +1603,9 @@ struct DialogAccessibilityTests : juce::UnitTest {
       expectEquals(static_cast<int>(modal->getAccessibilityHandler()->getRole()),
                    static_cast<int>(juce::AccessibilityRole::dialogWindow));
       expect(LiveScenario::until([&] { return modal->hasKeyboardFocus(true); }), "Dialog takes initial focus");
+      modal->giveAwayKeyboardFocus();
+      expect(LiveScenario::until([&] { return modal->hasKeyboardFocus(true); }),
+             "Active host reacquires dialog focus after native activation clears it");
       live.window->setVisible(false);
       modal->giveAwayKeyboardFocus();
       modal->focusFirstControl();
