@@ -1,13 +1,13 @@
-# TONE3000 Plugin - Multi-platform build
+# TONE3000 accessibility fork - macOS and Windows build
 # Builds VST3, Standalone, AU (macOS), and AAX (macOS/Windows, PACE-signed
-# when secrets are configured) on macOS, Windows, and Linux, plus the UI
+# when secrets are configured) on macOS and Windows, plus the UI
 # testbed whose self-tests run next to the DSP suite. macOS is universal via
 # per-arch builds + lipo, since dual -arch clang invocations are not
 # sccache-cacheable.
 
 name: Build Plugin
 
-# Dispatch only. A signed three-platform run (notarization, PACE, Azure)
+# Dispatch only. A signed desktop run (notarization, PACE, Azure)
 # is too expensive to fire on every PR. Restrict the `builds` environment
 # to required reviewers if you want an admin gate before a runner starts.
 on:
@@ -53,14 +53,6 @@ jobs:
             runs-on: windows-latest
             os: windows
             arch: x64
-          - name: Linux x64
-            runs-on: ubuntu-24.04
-            os: linux
-            arch: x64
-          - name: Linux aarch64
-            runs-on: ubuntu-24.04-arm
-            os: linux
-            arch: aarch64
 
     steps:
       - name: Checkout
@@ -527,60 +519,4 @@ jobs:
         with:
           name: TONE3000-v${{ env.T3K_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
           path: build/TONE3000-v*-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
-          if-no-files-found: error
-
-  # iOS Simulator: configure and build the Standalone app for the iPad
-  # Simulator so the iOS target cannot silently rot. No signing, no
-  # installer: the unsigned Simulator .app is uploaded for QA. Xcode is the
-  # generator here (the iOS presets need it for the app bundle and the
-  # multi-config build), and it does not honour the sccache compiler
-  # launchers, so this job builds cold.
-  ios-simulator:
-    name: iOS Simulator
-    runs-on: macos-14
-    environment: builds
-    env:
-      T3K_PUBLISHABLE_KEY: ${{ secrets.T3K_PUBLISHABLE_KEY }}
-      T3K_UPDATE_NOTICE: ${{ secrets.T3K_UPDATE_NOTICE }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Read version
-        run: echo "T3K_VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
-
-      - name: Cache CPM dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            libs/juce
-            libs/googletest
-            libs/clap-juce-extensions
-          key: cpm-deps-ios-${{ hashFiles('CMakeLists.txt', 'plugin/CMakeLists.txt') }}
-
-      - name: Configure CMake (iOS Simulator)
-        run: cmake --preset ios-simulator
-
-      - name: Build Standalone (iOS Simulator)
-        run: |
-          cmake --build build-ios --config ${{ env.BUILD_TYPE }} \
-            --target TONE3000_Standalone --parallel -- -sdk iphonesimulator
-
-      - name: Package Simulator app
-        run: |
-          set -euo pipefail
-          APP="build-ios/plugin/TONE3000_artefacts/${{ env.BUILD_TYPE }}/Standalone/TONE3000.app"
-          test -d "$APP"
-          ditto -c -k --keepParent "$APP" \
-            "build-ios/TONE3000-v${T3K_VERSION}-ios-simulator.zip"
-
-      - name: Upload artifacts (iOS Simulator)
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: TONE3000-v${{ env.T3K_VERSION }}-ios-simulator
-          path: build-ios/TONE3000-v*-ios-simulator.zip
           if-no-files-found: error
