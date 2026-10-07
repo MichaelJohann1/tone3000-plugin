@@ -13,7 +13,7 @@
 //   scrolling chain view.
 // On a touch screen: double tap resets, tapping the label opens the editor,
 // and a touch-and-hold fires onLongPress (the right-click of the platform).
-// From the keyboard (Tab to the knob; a click never focuses it): arrows step
+// From the keyboard (Tab or click to focus the knob): arrows step
 // the value (Shift: fine), Home/End go to the ends, Enter opens the type-in
 // editor. Screen readers see a slider named by the label, valued in units.
 #pragma once

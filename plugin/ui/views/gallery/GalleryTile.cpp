@@ -14,7 +14,8 @@ GalleryTile::GalleryTile(Services& services, std::string blockId, int size)
   // Sortable tiles are focusable (keyboard sorting) but draw no focus ring,
   // as the web didn't.
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(false);
+  setMouseClickGrabsKeyboardFocus(true);
+  setDescription("Enter: open. Space: reorder. Shift+F10: menu, including Load File and Load Folder.");
 }
 
 GalleryTile::~GalleryTile() {
@@ -60,7 +61,11 @@ void GalleryTile::openMenu(juce::Point<int> at) {
     juce::MessageManager::callAsync([old] { delete old; });
   }
   menu_ = std::make_unique<ContextMenu>(menuItems());
-  menu_->onDismiss = [this] { menuDismissedMs_ = juce::Time::currentTimeMillis(); };
+  const bool keyboardOpened = hasKeyboardFocus(false);
+  menu_->onDismiss = [this, keyboardOpened] {
+    menuDismissedMs_ = juce::Time::currentTimeMillis();
+    if (keyboardOpened && isShowing()) grabKeyboardFocus();
+  };
   menu_->openAtPoint(*this, at);
 }
 
@@ -157,6 +162,16 @@ void GalleryTile::mouseUp(const juce::MouseEvent& e) {
 }
 
 bool GalleryTile::keyPressed(const juce::KeyPress& key) {
+  // Enter opens the same editor/browser as a screen-reader press. Space
+  // retains keyboard sorting; Enter can still drop a travelling tile.
+  if (!travelling_ && key == juce::KeyPress::returnKey) {
+    open();
+    return true;
+  }
+  if (!travelling_ && key.isKeyCode(juce::KeyPress::F10Key) && key.getModifiers().isShiftDown()) {
+    openMenu(getLocalBounds().getCentre());
+    return true;
+  }
   if (auto* h = host()) return h->tileKey(*this, key);
   return false;
 }

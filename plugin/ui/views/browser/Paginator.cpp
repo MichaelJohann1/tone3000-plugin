@@ -15,8 +15,9 @@ Paginator::Paginator() {
   // One Tab stop for the whole row (Left / Right turn the page), not one
   // per number; a click never focuses it.
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(false);
+  setMouseClickGrabsKeyboardFocus(true);
   setTitle("Pages");
+  setHelpText("Up or Right: next page. Down or Left: previous page. Home: first page. End: last page.");
   rebuild();
 }
 
@@ -25,7 +26,10 @@ void Paginator::turnTo(int page) {
 }
 
 bool Paginator::keyPressed(const juce::KeyPress& key) {
-  const int step = key.isKeyCode(juce::KeyPress::leftKey) ? -1 : key.isKeyCode(juce::KeyPress::rightKey) ? 1 : 0;
+  if (key.isKeyCode(juce::KeyPress::homeKey)) { turnTo(1); return true; }
+  if (key.isKeyCode(juce::KeyPress::endKey)) { turnTo(totalPages_); return true; }
+  const int step = (key.isKeyCode(juce::KeyPress::leftKey) || key.isKeyCode(juce::KeyPress::downKey)) ? -1
+                 : (key.isKeyCode(juce::KeyPress::rightKey) || key.isKeyCode(juce::KeyPress::upKey)) ? 1 : 0;
   if (step == 0) return false;
   turnTo(page_ + step);
   return true;
@@ -61,6 +65,7 @@ void Paginator::set(int page, int totalPages) {
   page_ = page;
   totalPages_ = totalPages;
   rebuild();
+  if (auto* handler = getAccessibilityHandler()) handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
 }
 
 std::vector<int> Paginator::pagesFor(int page, int totalPages) {

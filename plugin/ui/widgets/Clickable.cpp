@@ -7,14 +7,28 @@ namespace t3k::ui {
 
 namespace {
 
+juce::AccessibilityActions buttonActions(Clickable& button) {
+  juce::AccessibilityActions actions;
+  actions.addAction(juce::AccessibilityActionType::press, [&button] {
+    if (button.isShowing()) button.grabKeyboardFocus();
+    button.triggerClick();
+  });
+  if (button.isToggleable())
+    actions.addAction(juce::AccessibilityActionType::toggle, [&button] {
+      if (button.isShowing()) button.grabKeyboardFocus();
+      button.triggerClick();
+    });
+  return actions;
+}
+
 // juce::Button's own handler is not public; this is the part of it we use
 // (a pressable button, checked when toggleable) with our naming.
 class Handler : public juce::AccessibilityHandler {
 public:
   explicit Handler(Clickable& button)
-      : juce::AccessibilityHandler(button, juce::AccessibilityRole::button,
-                                   juce::AccessibilityActions().addAction(juce::AccessibilityActionType::press,
-                                                                          [&button] { button.triggerClick(); })),
+      : juce::AccessibilityHandler(button, button.isToggleable() ? juce::AccessibilityRole::toggleButton
+                                                                : juce::AccessibilityRole::button,
+                                   buttonActions(button)),
         button_(button) {}
 
   juce::String getTitle() const override { return button_.accessibleName(); }
@@ -33,7 +47,7 @@ private:
 
 Clickable::Clickable(const juce::String& text) : juce::Button(text) {
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(false);
+  setMouseClickGrabsKeyboardFocus(true);
 }
 
 juce::String Clickable::accessibleName() const {

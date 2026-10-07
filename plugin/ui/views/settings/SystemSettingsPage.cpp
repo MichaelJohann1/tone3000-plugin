@@ -4,6 +4,7 @@
 
 #include "core/CustomIcons.h"
 #include "core/Fonts.h"
+#include "core/Help.h"
 #include "core/Paint.h"
 #include "core/Theme.h"
 #include "widgets/Clickable.h"
@@ -287,6 +288,7 @@ template <typename Fn>
 void SystemSettingsPage::apply(Fn&& fn) {
   error_ = fn();
   sync();
+  if (error_.isNotEmpty()) help::announce(error_);
 }
 
 void SystemSettingsPage::sync() {

@@ -9,6 +9,7 @@ namespace t3k::ui {
 
 Popover::Popover() {
   setWantsKeyboardFocus(true);
+  setHelpText("Up/Down: move between menu controls. Left/Right: adjust sliders. Tab/Shift+Tab: move between controls, including text fields. Enter: activate or edit. Escape: close.");
   setMouseClickGrabsKeyboardFocus(false);
   setFocusContainerType(FocusContainerType::keyboardFocusContainer);
 }
@@ -21,7 +22,10 @@ void Popover::open(juce::Component& anchor, Align align, int gap, int inset, Pla
   if (host == nullptr) return;
 
   anchor_ = &anchor;
-  keyboardOpened_ = anchor.hasKeyboardFocus(false);
+  auto* focused = getCurrentlyFocusedComponent();
+  contextReturnFocus_ = focused != nullptr && focused != anchor.getTopLevelComponent()
+                            && focused->getTopLevelComponent() == anchor.getTopLevelComponent() ? focused : nullptr;
+  keyboardOpened_ = contextReturnFocus_ != nullptr;
   align_ = align;
   placement_ = placement;
   gap_ = gap;
@@ -45,6 +49,7 @@ void Popover::openAt(juce::Component& context, juce::Point<int> point) {
   if (host == nullptr) return;
 
   anchor_ = nullptr;
+  contextReturnFocus_ = context.hasKeyboardFocus(true) ? getCurrentlyFocusedComponent() : nullptr;
   point_ = point;
   if (getTitle().isEmpty()) setTitle("Context menu");
   host->overlayLayer().addAndMakeVisible(this);
@@ -128,18 +133,21 @@ float Popover::adoptScaleOf(const juce::Component& source) {
 
 void Popover::close() {
   if (!isOpen()) return;
-  // Opened from a focused anchor, or a row focused since (a click never
-  // focuses a row): the keyboard is driving, so it is back on the anchor
-  // when the panel goes. A mouse-opened panel leaves nothing focused, and
-  // the host's keys work again.
+  // Return to the actual opener, which may be a group's power button even
+  // when the panel is positioned against its knob. Fall back to the anchor
+  // if the recorded opener has disappeared.
   auto* focused = getCurrentlyFocusedComponent();
   const bool toAnchor = keyboardOpened_ || (focused != nullptr && focused != this && isParentOf(focused));
   keyboardOpened_ = false;
   juce::Desktop::getInstance().removeGlobalMouseListener(&watcher_);
   target_.reset();
   if (auto* parent = getParentComponent()) parent->removeChildComponent(this);
-  if (toAnchor && anchor_ != nullptr && anchor_->isShowing() && anchor_->getWantsKeyboardFocus())
+  if (contextReturnFocus_ != nullptr && contextReturnFocus_->isShowing()
+           && contextReturnFocus_->getWantsKeyboardFocus())
+    contextReturnFocus_->grabKeyboardFocus();
+  else if (toAnchor && anchor_ != nullptr && anchor_->isShowing() && anchor_->getWantsKeyboardFocus())
     anchor_->grabKeyboardFocus();
+  contextReturnFocus_ = nullptr;
 }
 
 void Popover::dismiss() {

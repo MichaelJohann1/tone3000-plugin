@@ -39,6 +39,13 @@
 #include "views/browser/ToneCard.h"
 #include "views/gallery/GalleryGeometry.h"
 #include "views/gallery/GalleryTile.h"
+#include "views/gallery/AddTile.h"
+#include "views/gallery/ToneTile.h"
+#include "views/gallery/GalleryLane.h"
+#include "views/modals/UpdateNotice.h"
+#include "views/modals/ConnectionModal.h"
+#include "widgets/RichTextView.h"
+#include "widgets/ChromeIconButton.h"
 #include "widgets/Avatar.h"
 #include "widgets/ChromeTextButton.h"
 #include "widgets/Clickable.h"
@@ -50,12 +57,22 @@
 #include "widgets/IconButton.h"
 #include "widgets/Knob.h"
 #include "widgets/form/FormControls.h"
+#include "widgets/form/SelectField.h"
 #include "widgets/Popover.h"
 #include "widgets/SegmentedText.h"
+#include "widgets/SecondaryPress.h"
 
 namespace t3k::ui::testbed {
 
 namespace {
+
+// Peer-injected pointer events still use native hit testing. Keep the test
+// window on screen and above unrelated desktop windows for the gesture.
+void showTestWindow(juce::DocumentWindow& window) {
+  window.centreWithSize(window.getWidth(), window.getHeight());
+  window.setAlwaysOnTop(true);
+  window.setVisible(true);
+}
 
 juce::String flat(const RichText& runs) {
   juce::String s;
@@ -971,10 +988,10 @@ struct AccessibilityTests : juce::UnitTest {
     expectEquals(help::lead(juce::String()), juce::String());
     expectEquals(help::lead(": odd"), juce::String(": odd"));
 
-    beginTest("buttons take focus from Tab, never from a click");
+    beginTest("buttons take focus from Tab and clicks");
     IconButton icon(Icon::X);
     expect(icon.getWantsKeyboardFocus());
-    expect(!icon.getMouseClickGrabsKeyboardFocus());
+    expect(icon.getMouseClickGrabsKeyboardFocus());
 
     beginTest("a button's name: title, else text, else the hint lead");
     icon.setHelpText(help::text(help::Key::undo));
@@ -1006,7 +1023,7 @@ struct AccessibilityTests : juce::UnitTest {
     options.help = help::Key::inputLevel;
     Knob knob(options);
     expect(knob.getWantsKeyboardFocus());
-    expect(!knob.getMouseClickGrabsKeyboardFocus());
+    expect(knob.getMouseClickGrabsKeyboardFocus());
     expectEquals(knob.getTitle(), juce::String("Input"));
     knob.setValue(0.5f);
     std::vector<float> emitted;
@@ -1037,6 +1054,14 @@ struct AccessibilityTests : juce::UnitTest {
     expectEquals(turnedTo, 3);
     expect(pages.keyPressed(juce::KeyPress(juce::KeyPress::leftKey)));
     expectEquals(turnedTo, 1);
+    expect(pages.keyPressed(juce::KeyPress(juce::KeyPress::upKey)));
+    expectEquals(turnedTo, 3);
+    expect(pages.keyPressed(juce::KeyPress(juce::KeyPress::downKey)));
+    expectEquals(turnedTo, 1);
+    expect(pages.keyPressed(juce::KeyPress(juce::KeyPress::endKey)));
+    expectEquals(turnedTo, 5);
+    expect(pages.keyPressed(juce::KeyPress(juce::KeyPress::homeKey)));
+    expectEquals(turnedTo, 1);
     expectEquals(pages.createAccessibilityHandler()->getValueInterface()->getCurrentValueAsString(),
                  juce::String("Page 2 of 5"));
 
@@ -1049,6 +1074,40 @@ struct AccessibilityTests : juce::UnitTest {
     beginTest("decoration stays out of the accessibility tree");
     expect(!Avatar().isAccessible());
     expect(!FormatBadge().isAccessible());
+
+    beginTest("text and segmented toggles expose their actual states");
+    ChromeTextButton pre("PRE", help::Key::eqPre);
+    pre.setToggleable(true);
+    pre.setArmed(false);
+    auto preHandler = pre.createAccessibilityHandler();
+    expect(preHandler->getRole() == juce::AccessibilityRole::toggleButton);
+    expect(!preHandler->getCurrentState().isChecked());
+    pre.setArmed(true);
+    expect(preHandler->getCurrentState().isChecked());
+    pre.setArmed(false);
+    expect(!preHandler->getCurrentState().isChecked());
+    SegmentedText segments({{"Solo", "Solo this chain", nullptr, 16}, {"Invert", "Invert polarity", nullptr, 16}}, SegmentedText::armed());
+    auto soloHandler = segments.getChildComponent(0)->createAccessibilityHandler();
+    auto invertHandler = segments.getChildComponent(1)->createAccessibilityHandler();
+    segments.setOn(1, true);
+    expect(!soloHandler->getCurrentState().isChecked());
+    expect(invertHandler->getCurrentState().isChecked());
+    segments.setOn(1, false);
+    expect(!invertHandler->getCurrentState().isChecked());
+
+    beginTest("power buttons expose their initial and changed states and a toggle action");
+    ChromeIconButton power(Icon::Power, ChromeIconButton::Tone::power, help::Key::blockPower);
+    auto powerHandler = power.createAccessibilityHandler();
+    expect(powerHandler->getCurrentState().isCheckable());
+    expect(powerHandler->getCurrentState().isChecked());
+    power.setOn(false);
+    expect(!powerHandler->getCurrentState().isChecked());
+    power.onClick = [&] { power.setOn(!power.isOn()); };
+    expect(powerHandler->getActions().invoke(juce::AccessibilityActionType::toggle));
+    drive::wait(150);
+    expect(power.isOn());
+    expect(powerHandler->getCurrentState().isChecked());
+    expect(!icon.createAccessibilityHandler()->getActions().contains(juce::AccessibilityActionType::toggle));
   }
 };
 
@@ -1090,7 +1149,7 @@ struct FocusPolicyTests : juce::UnitTest {
     juce::DocumentWindow window("focus policy", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto* peer = host.getPeer();
     if (peer == nullptr) {
@@ -1130,7 +1189,7 @@ struct FocusPolicyTests : juce::UnitTest {
     expect(!key(*peer, juce::KeyPress::spaceKey));  // and with nothing focused
     key(*peer, juce::KeyPress::escapeKey);
 
-    beginTest("a click never focuses a button or a knob, and drops any focus held");
+    beginTest("clicking and changing a knob retains plugin focus; menus restore their button");
     auto* knob = dynamic_cast<Knob*>(drive::find(root, [](juce::Component& c) {
       return dynamic_cast<Knob*>(&c) != nullptr && c.isShowing() && c.isEnabled();
     }));
@@ -1140,13 +1199,16 @@ struct FocusPolicyTests : juce::UnitTest {
     expect(key(*peer, juce::KeyPress::tabKey));
     expect(focused() != nullptr);
     click(*peer, *knob);
-    expect(focused() == nullptr);
-    expect(!key(*peer, juce::KeyPress::returnKey));  // Enter goes to the host after mouse work
-    click(*peer, *inputMode);  // opens its menu: the panel takes focus, the button never does
+    expect(focused() == knob);
+    expect(key(*peer, juce::KeyPress::rightKey));
+    expect(focused() == knob);
+    knob->getAccessibilityHandler()->getValueInterface()->setValue(0.0);
+    expect(focused() == knob, "Screen-reader value changes keep the slider focused");
+    click(*peer, *inputMode);  // opens its menu: the panel takes focus
     expect(focused() != inputMode);
     key(*peer, juce::KeyPress::escapeKey);
     pump(30);
-    expect(focused() == nullptr);
+    expect(focused() == inputMode);
 
     beginTest("a keyboard-opened menu: arrows walk the rows, Escape returns to the anchor");
     inputMode->grabKeyboardFocus();
@@ -1189,7 +1251,7 @@ struct LiveScenario {
     window = std::make_unique<juce::DocumentWindow>(scenarioId, juce::Colours::black, 0);
     host = std::make_unique<ScaledHost>(*backend, *scenario, fixtures.root);
     window->setContentNonOwned(host.get(), true);
-    window->setVisible(true);
+    showTestWindow(*window);
     pump(400);
     peer = host->getPeer();
     if (peer == nullptr) {
@@ -1296,6 +1358,523 @@ struct LiveScenario {
   std::unique_ptr<ScaledHost> host;
   juce::ComponentPeer* peer = nullptr;
   bool ok = false;
+};
+
+struct MenuTunerAccessibilityTests : juce::UnitTest {
+  MenuTunerAccessibilityTests() : juce::UnitTest("Menu and tuner accessibility", "ui") {}
+  void runTest() override {
+    beginTest("sliders in menus navigate vertically and adjust horizontally");
+    LiveScenario live(*this, "chrome-spread-on");
+    expect(live.ok);
+    if (!live.ok) return;
+    Popover menu;
+    Knob first(Knob::Options{}), second(Knob::Options{});
+    menu.addAndMakeVisible(first); menu.addAndMakeVisible(second);
+    first.setBounds(0, 0, 60, 60); second.setBounds(70, 0, 60, 60);
+    menu.setSize(140, 80); menu.open(*live.root().getChildComponent(0), Popover::Align::left, 0);
+    LiveScenario::focus(first);
+    const float before = first.value();
+    expect(first.keyPressed(juce::KeyPress(juce::KeyPress::downKey)));
+    expect(LiveScenario::until([&] { return second.hasKeyboardFocus(false); }), "Down focuses second slider");
+    expectEquals(first.value(), before);
+    expect(second.keyPressed(juce::KeyPress(juce::KeyPress::upKey)));
+    expect(LiveScenario::until([&] { return first.hasKeyboardFocus(false); }), "Up focuses first slider");
+    expect(first.keyPressed(juce::KeyPress(juce::KeyPress::rightKey)));
+    expect(first.value() > before);
+    menu.close();
+    beginTest("tuner exposes live readings, focus and close shortcut");
+    live.backend->setTuner(juce::JSON::parse("{\"frequency\":440,\"confidence\":1}"));
+    live.root().setTunerShown(true);
+    LiveScenario::pump(200);
+    auto* tuner = dynamic_cast<TunerView*>(drive::find(live.root(), [](juce::Component& c) { return dynamic_cast<TunerView*>(&c) != nullptr; }));
+    expect(tuner != nullptr);
+    if (tuner == nullptr) return;
+    expect(tuner->hasKeyboardFocus(false));
+    auto handler = tuner->createAccessibilityHandler();
+    expect(handler->getValueInterface()->isReadOnly());
+    expect(tuner->accessibleReading().contains("A 4"));
+    expect(tuner->accessibleReading().contains("440.0 hertz, in tune"));
+    expect(tuner->keyPressed(juce::KeyPress(juce::KeyPress::returnKey)));
+    expect(tuner->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
+    expect(!live.root().tunerShown());
+  }
+};
+MenuTunerAccessibilityTests menuTunerAccessibilityTests;
+
+struct BranchAccessibilityTests : juce::UnitTest {
+  BranchAccessibilityTests() : juce::UnitTest("Branch accessibility", "ui") {}
+  void runTest() override {
+    beginTest("keyboard activation removes and sets routing while retaining focus");
+    LiveScenario live(*this, "main-stereo-branched");
+    expect(live.ok);
+    if (!live.ok) return;
+    auto* junction = dynamic_cast<Clickable*>(drive::byHelpPrefix(live.root(), "Branch Point:"));
+    expect(junction != nullptr);
+    if (junction == nullptr) return;
+    const auto title = junction->getTitle();
+    LiveScenario::focus(*junction);
+    auto* handler = junction->getAccessibilityHandler();
+    expect(handler != nullptr);
+    if (handler == nullptr) return;
+    expect(handler->getCurrentState().isChecked());
+    handler->getActions().invoke(juce::AccessibilityActionType::press);
+    expect(LiveScenario::until([&] { return !live.root().services().chain.state().branch.has_value(); }));
+    auto* focused = dynamic_cast<Clickable*>(LiveScenario::focused());
+    expect(focused != nullptr && focused->getTitle().startsWith("Branch after "));
+    if (focused == nullptr) return;
+    auto* nextHandler = focused->getAccessibilityHandler();
+    expect(nextHandler != nullptr);
+    if (nextHandler == nullptr) return;
+    expect(!nextHandler->getCurrentState().isChecked());
+    nextHandler->getActions().invoke(juce::AccessibilityActionType::press);
+    expect(LiveScenario::until([&] { return live.root().services().chain.state().branch.has_value(); }));
+    focused = dynamic_cast<Clickable*>(LiveScenario::focused());
+    expect(focused != nullptr && focused->getTitle() == title);
+  }
+};
+BranchAccessibilityTests branchAccessibilityTests;
+
+struct ToggleContextAccessibilityTests : juce::UnitTest {
+  ToggleContextAccessibilityTests() : juce::UnitTest("Toggle and context accessibility", "ui") {}
+  void runTest() override {
+    beginTest("effect controls mount in a focused editor");
+    LiveScenario live(*this, "chrome-spread-on");
+    expect(live.ok);
+    if (!live.ok) return;
+    // This fixture needs no drive; its effect state is already mounted.
+    live.root().services().prefs.setBool(UiPrefs::kShowPitchControl, true);
+    LiveScenario::pump(100);
+    beginTest("effect power toggles retain focus and expose state changes");
+    for (const auto* prefix : {"Gate Power:", "Pitch Power:"}) {
+      auto* power = dynamic_cast<Clickable*>(drive::byHelpPrefix(live.root(), prefix));
+      expect(power != nullptr);
+      if (power == nullptr) continue;
+      auto* handler = power->getAccessibilityHandler();
+      const bool before = handler->getCurrentState().isChecked();
+      expect(handler->getActions().invoke(juce::AccessibilityActionType::toggle));
+      expect(LiveScenario::until([&] { return handler->getCurrentState().isChecked() != before; }));
+      expect(power->hasKeyboardFocus(false));
+    }
+    beginTest("Spread collapsing and expanding transfers focus to the matching switch");
+    auto* power = dynamic_cast<Clickable*>(drive::byHelpPrefix(live.root(), "Spread Power:"));
+    expect(power != nullptr && power->isShowing());
+    if (power == nullptr || !power->isShowing()) return;
+    expect(power->getAccessibilityHandler()->getCurrentState().isChecked());
+    expect(power->getAccessibilityHandler()->getActions().invoke(juce::AccessibilityActionType::toggle));
+    Clickable* advert = nullptr;
+    expect(LiveScenario::until([&] {
+      advert = dynamic_cast<Clickable*>(drive::buttonNamed(live.root(), "SPREAD"));
+      return advert != nullptr && advert->hasKeyboardFocus(false);
+    }));
+    if (advert == nullptr) return;
+    expect(!advert->getAccessibilityHandler()->getCurrentState().isChecked());
+    expect(advert->getAccessibilityHandler()->getActions().invoke(juce::AccessibilityActionType::toggle));
+    expect(LiveScenario::until([&] { return power->isShowing() && power->hasKeyboardFocus(false); }));
+    expect(power->getAccessibilityHandler()->getCurrentState().isChecked());
+
+    beginTest("Shift F10 opens advanced from each power button; Escape returns to the exact opener");
+    for (const auto* prefix : {"Gate Power:", "Pitch Power:", "Spread Power:"}) {
+      auto* opener = drive::byHelpPrefix(live.root(), prefix);
+      expect(opener != nullptr);
+      if (opener == nullptr) continue;
+      LiveScenario::focus(*opener);
+      expect(live.key(juce::KeyPress::F10Key, juce::ModifierKeys::shiftModifier));
+      expect(dynamic_cast<Popover*>(LiveScenario::focused()) != nullptr);
+      expect(live.key(juce::KeyPress::escapeKey));
+      expect(opener->hasKeyboardFocus(false));
+#if JUCE_WINDOWS
+      expect(live.key(kWindowsApplicationsKey));
+      expect(dynamic_cast<Popover*>(LiveScenario::focused()) != nullptr);
+      expect(live.key(juce::KeyPress::escapeKey));
+      expect(opener->hasKeyboardFocus(false));
+#endif
+    }
+    beginTest("advanced also opens from knobs and returns focus to the same knob");
+    for (const auto* prefix : {"Gate:", "Pitch Shift:", "Offset:"}) {
+      auto* opener = drive::byHelpPrefix(live.root(), prefix);
+      expect(opener != nullptr);
+      if (opener == nullptr) continue;
+      LiveScenario::focus(*opener);
+      expect(live.key(juce::KeyPress::F10Key, juce::ModifierKeys::shiftModifier));
+      expect(dynamic_cast<Popover*>(LiveScenario::focused()) != nullptr);
+      expect(live.key(juce::KeyPress::escapeKey));
+      expect(opener->hasKeyboardFocus(false));
+    }
+  }
+};
+
+struct BrowserAccessibilityTests : juce::UnitTest {
+  BrowserAccessibilityTests() : juce::UnitTest("Browser accessibility", "ui") {}
+  void runTest() override {
+    beginTest("gear filters activate from screen-reader actions and retain focus");
+    LiveScenario live(*this, "browser-signed-out");
+    expect(live.ok);
+    if (!live.ok) return;
+    live.drive();
+    auto* chip = dynamic_cast<FilterChip*>(drive::find(live.root(), [](juce::Component& c) {
+      auto* filter = dynamic_cast<FilterChip*>(&c);
+      return filter != nullptr && filter->getButtonText() == "Amp Head" && filter->isShowing();
+    }));
+    expect(chip != nullptr);
+    if (chip == nullptr) return;
+    expect(chip->getHelpText().contains("without a speaker cabinet"));
+    expect(chip->getHelpText().contains("choose a tone"));
+    auto* handler = chip->getAccessibilityHandler();
+    expect(handler->getActions().invoke(juce::AccessibilityActionType::press));
+    LiveScenario::pump(100);
+    expectEquals(live.root().services().browser.query.gear, juce::String("amp"));
+    expect(chip->hasKeyboardFocus(false));
+    expect(handler->getCurrentState().isChecked());
+    expect(LiveScenario::until([&] {
+      const auto& result = live.root().services().browser.result;
+      return result && std::all_of(result->data.begin(), result->data.end(), [](const Tone& tone) {
+        return tone.gear == "amp";
+      });
+    }), "Results are filtered by gear");
+    expect(handler->getActions().invoke(juce::AccessibilityActionType::press));
+    LiveScenario::pump(100);
+    expect(live.root().services().browser.query.gear.isEmpty());
+    expect(!handler->getCurrentState().isChecked());
+    expect(chip->hasKeyboardFocus(false));
+  }
+};
+
+struct PresetAccessibilityTests : juce::UnitTest {
+  PresetAccessibilityTests() : juce::UnitTest("Preset accessibility", "ui") {}
+  void runTest() override {
+    LiveScenario live(*this, "chrome-preset-browse");
+    if (!live.ok) return;
+    auto& root = live.root();
+    beginTest("search narrows named preset buttons and Enter loads the selected chain");
+    drive::clickByHelp(root, "Presets:");
+    drive::fill(root, "Search presets", "Church");
+    drive::wait(400);
+    auto* result = drive::buttonNamed(root, "Church Sunday");
+    expect(result != nullptr);
+    expect(drive::buttonNamed(root, "My Lead Tone") == nullptr);
+    if (result != nullptr) {
+      LiveScenario::focus(*result);
+      live.key(juce::KeyPress::returnKey);
+      drive::wait(200);
+      const auto& active = root.services().chain.state().preset;
+      expect(active.has_value());
+      if (active) expectEquals(active->name, juce::String("Church Sunday"));
+      expect(drive::find(root, [](juce::Component& c) {
+        auto* button = dynamic_cast<Clickable*>(&c);
+        return button != nullptr && button->isShowing() && button->accessibleName() == "Presets: Church Sunday";
+      }) != nullptr);
+    }
+
+    beginTest("Enter on Add Tone opens browsing instead of starting a sort");
+    auto* add = dynamic_cast<AddTile*>(drive::find(root, [](juce::Component& c) {
+      return dynamic_cast<AddTile*>(&c) != nullptr && c.isShowing();
+    }));
+    expect(add != nullptr);
+    if (add != nullptr) {
+      int opens = 0;
+      add->onAdd = [&](const std::string&) { ++opens; };
+      expect(add->keyPressed(juce::KeyPress(juce::KeyPress::returnKey)));
+      expectEquals(opens, 1);
+      expect(!add->travelling());
+      beginTest("Shift F10 opens the local-file actions by keyboard");
+      expect(add->keyPressed(juce::KeyPress(juce::KeyPress::F10Key, juce::ModifierKeys::shiftModifier, 0)));
+      expect(drive::buttonNamed(root, "Load File") != nullptr);
+      expect(drive::buttonNamed(root, "Load Folder") != nullptr);
+    }
+  }
+};
+
+struct DialogAccessibilityTests : juce::UnitTest {
+  DialogAccessibilityTests() : juce::UnitTest("Dialog accessibility", "ui") {}
+  void runTest() override {
+    beginTest("update text, version and reminder labels are accessible; Tab stays inside; Escape closes");
+    {
+      LiveScenario live(*this, "load-update-notice");
+      expect(live.ok);
+      if (!live.ok) return;
+      live.drive();
+      auto* modal = dynamic_cast<UpdateNotice*>(drive::find(live.root(), [](juce::Component& c) {
+        return dynamic_cast<UpdateNotice*>(&c) != nullptr && c.isShowing();
+      }));
+      expect(modal != nullptr);
+      if (modal == nullptr) return;
+      expect(modal->getTitle().contains("1.5.0"));
+      expect(modal->getDescription().contains("per-block EQ"));
+      expectEquals(static_cast<int>(modal->getAccessibilityHandler()->getRole()),
+                   static_cast<int>(juce::AccessibilityRole::dialogWindow));
+      expect(LiveScenario::until([&] { return modal->hasKeyboardFocus(true); }), "Dialog takes initial focus");
+      live.window->setVisible(false);
+      modal->giveAwayKeyboardFocus();
+      modal->focusFirstControl();
+      LiveScenario::pump(100);
+      expect(!modal->hasKeyboardFocus(true), "Hidden editor waits for host focus");
+      showTestWindow(*live.window);
+      live.window->toFront(true);
+      live.peer->grabFocus();
+      expect(LiveScenario::until([&] { return modal->hasKeyboardFocus(true); }),
+             "Existing dialog receives focus when the host activates the editor");
+      auto* remind = drive::buttonNamed(*modal, "7 days");
+      expect(remind != nullptr);
+      if (remind) expectEquals(remind->getAccessibilityHandler()->getTitle(), juce::String("Remind me in 7 days"));
+      for (int i = 0; i < 12; ++i) {
+        live.key(juce::KeyPress::tabKey, i < 6 ? juce::ModifierKeys() : juce::ModifierKeys::shiftModifier);
+        expect(modal->hasKeyboardFocus(true), "Tab cannot enter controls behind the dialog");
+      }
+      modal->giveAwayKeyboardFocus(); // models entering the editor with no JUCE control focused
+      live.key(juce::KeyPress::tabKey);
+      expect(modal->hasKeyboardFocus(true), "Tab from host enters the dialog");
+      juce::Component::SafePointer<UpdateNotice> safe(modal);
+      live.key(juce::KeyPress::escapeKey);
+      expect(LiveScenario::until([&] { return safe == nullptr; }));
+      expect(!live.root().services().updates.notice().has_value());
+    }
+    beginTest("connection dialog describes the problem and restores its opener on Escape");
+    {
+      LiveScenario live(*this, "load-offline-modal");
+      expect(live.ok);
+      if (!live.ok) return;
+      auto* add = drive::find(live.root(), [](juce::Component& c) { return dynamic_cast<AddTile*>(&c) != nullptr && c.isShowing(); });
+      expect(add != nullptr);
+      if (!add) return;
+      LiveScenario::focus(*add);
+      live.key(juce::KeyPress::returnKey);
+      ConnectionModal* modal = nullptr;
+      expect(LiveScenario::until([&] {
+        modal = dynamic_cast<ConnectionModal*>(drive::find(live.root(), [](juce::Component& c) {
+          return dynamic_cast<ConnectionModal*>(&c) != nullptr && c.isShowing();
+        }));
+        return modal != nullptr;
+      }));
+      if (!modal) return;
+      expect(modal->getDescription().contains("No internet connection"));
+      expect(modal->hasKeyboardFocus(true));
+      juce::Component::SafePointer<ConnectionModal> safe(modal);
+      live.key(juce::KeyPress::escapeKey);
+      expect(LiveScenario::until([&] { return safe == nullptr; }));
+      expect(add->hasKeyboardFocus(false), "Returns to Add tone");
+    }
+    beginTest("rich dialog text is readable and links activate without a mouse");
+    RichTextView text(13, 20, juce::Colours::white);
+    text.setText(Html::toRichText("Read <a href='https://example.com/notes'>release notes</a>."));
+    auto handler = text.createAccessibilityHandler();
+    expectEquals(handler->getTitle(), juce::String("Read release notes."));
+    expectEquals(static_cast<int>(handler->getRole()), static_cast<int>(juce::AccessibilityRole::staticText));
+    juce::String opened;
+    text.onLink = [&](const juce::String& url) { opened = url; };
+    expectEquals(text.getNumChildComponents(), 1);
+    if (auto* link = text.getChildComponent(0)) {
+      expect(link->getWantsKeyboardFocus());
+      expect(link->keyPressed(juce::KeyPress(juce::KeyPress::returnKey)));
+      expectEquals(opened, juce::String("https://example.com/notes"));
+    }
+    beginTest("secure-connection message and dismissal are accessible");
+    ConnectionModal secure({}, ConnectionGate::Problem::insecure, true);
+    expect(secure.getDescription().contains("wrong date & time"));
+    bool dismissed = false;
+    secure.onDismiss = [&] { dismissed = true; };
+    expect(secure.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
+    expect(dismissed);
+    expect(drive::find(secure, [](juce::Component& c) {
+      return dynamic_cast<juce::Button*>(&c) != nullptr && c.getName() == "Date & time settings";
+    }) != nullptr);
+    beginTest("Escape from preset popup text fields closes and restores the opening button");
+    {
+      LiveScenario live(*this, "chrome-preset-browse");
+      expect(live.ok);
+      if (!live.ok) return;
+      for (const auto& prefix : {"Save Preset:", "Presets:"}) {
+        auto* opener = drive::byHelpPrefix(live.root(), prefix);
+        expect(opener != nullptr);
+        if (!opener) continue;
+        LiveScenario::focus(*opener);
+        live.key(juce::KeyPress::returnKey);
+        drive::wait(50);
+        auto* panel = dynamic_cast<Popover*>(drive::find(live.root(), [](juce::Component& c) {
+          auto* p = dynamic_cast<Popover*>(&c);
+          return p != nullptr && p->isShowing() && p->isOpen();
+        }));
+        expect(panel != nullptr);
+        if (!panel) continue;
+        expect(dynamic_cast<juce::TextEditor*>(LiveScenario::focused()) != nullptr);
+        live.key(juce::KeyPress::escapeKey);
+        drive::wait(50);
+        expect(!panel->isOpen());
+        expect(opener->hasKeyboardFocus(false), "Popup returns to the opening button");
+      }
+      if (juce::SystemStats::getEnvironmentVariable("T3K_DIALOG_PREVIEW", "") == "1") {
+        beginTest("opt-in previews open real dialogs and close without changing update or connection state");
+        for (const auto code : {'U', 'O', 'S'}) {
+          live.key(code, juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier);
+          auto* modal = dynamic_cast<ModalLayer*>(drive::find(live.root(), [](juce::Component& c) {
+            return dynamic_cast<ModalLayer*>(&c) != nullptr && c.isShowing();
+          }));
+          expect(modal != nullptr);
+          if (!modal) continue;
+          expect(modal->hasKeyboardFocus(true));
+          juce::Component::SafePointer<ModalLayer> safe(modal);
+          live.key(juce::KeyPress::escapeKey);
+          expect(LiveScenario::until([&] { return safe == nullptr; }));
+          expect(!live.root().services().connection.problem().has_value());
+        }
+      }
+    }
+  }
+};
+
+struct ChainAccessibilityTests : juce::UnitTest {
+  ChainAccessibilityTests() : juce::UnitTest("Chain accessibility", "ui") {}
+  void runTest() override {
+    beginTest("loading transitions report completion, failure and retry without polling chatter");
+    ChainState before, after;
+    ChainItem item;
+    item.isInsert = false;
+    item.blockId = "test-model";
+    item.tone.title = "Test amp";
+    after.chain.push_back(item);
+    expect(ChainStore::loadingFeedback(before, after).startsWith("Loading Test amp"));
+    before = after;
+    expect(ChainStore::loadingFeedback(before, after).isEmpty());
+    after.chain[0].loaded = true;
+    expect(ChainStore::loadingFeedback(before, after).startsWith("Loaded Test amp"));
+    before = after;
+    after.chain[0].params.enabled = false;
+    expect(ChainStore::loadingFeedback(before, after).isEmpty());
+    after.chain[0].modelLoading = true; // old model can still be playing
+    expect(ChainStore::loadingFeedback(before, after).startsWith("Loading Test amp"));
+    before = after;
+    after.chain[0].modelLoading = false;
+    after.chain[0].loadFailed = true;
+    expect(ChainStore::loadingFeedback(before, after).startsWith("Could not load Test amp"));
+    before = after;
+    expect(ChainStore::loadingFeedback(before, after).isEmpty());
+    after.chain[0].loadFailed = false;
+    after.chain[0].modelLoading = true;
+    expect(ChainStore::loadingFeedback(before, after).startsWith("Loading Test amp"));
+    before = after;
+    after.chain.clear();
+    expect(ChainStore::loadingFeedback(before, after).isEmpty());
+
+    beginTest("keyboard moving crosses lanes, keeps focus, commits and cancels");
+    LiveScenario live(*this, "main-stereo");
+    expect(live.ok);
+    if (!live.ok) return;
+    auto* tile = dynamic_cast<ToneTile*>(drive::find(live.root(), [](juce::Component& c) {
+      auto* t = dynamic_cast<ToneTile*>(&c);
+      auto* lane = c.findParentComponentOfClass<GalleryLane>();
+      return t != nullptr && t->isShowing() && lane != nullptr && lane->side() == ChainSide::left;
+    }));
+    expect(tile != nullptr);
+    if (tile == nullptr) return;
+    const auto id = tile->blockId();
+    const auto locate = [&]() {
+      return dynamic_cast<ToneTile*>(drive::find(live.root(), [&](juce::Component& c) {
+        auto* t = dynamic_cast<ToneTile*>(&c);
+        return t != nullptr && t->blockId() == id;
+      }));
+    };
+    expect(tile->getDescription().contains("Left chain"));
+    LiveScenario::focus(*tile);
+    expect(live.key(juce::KeyPress::spaceKey));
+    expect(tile->travelling());
+    const auto startDescription = tile->getDescription();
+    expect(live.key(juce::KeyPress::rightKey));
+    expect(tile->getDescription() != startDescription, "Right arrow changes the position");
+    expect(live.key(juce::KeyPress::leftKey));
+    expectEquals(tile->getDescription(), startDescription);
+    expect(live.key(juce::KeyPress::downKey));
+    tile = locate();
+    expect(tile != nullptr && tile->hasKeyboardFocus(false));
+    if (tile == nullptr) return;
+    expect(tile->getDescription().contains("Right chain"));
+    expect(live.key(juce::KeyPress::returnKey));
+    tile = locate();
+    expect(tile != nullptr && !tile->travelling() && tile->hasKeyboardFocus(false), "Drop retains block focus");
+    if (tile == nullptr) return;
+    expect(tile->getDescription().contains("Right chain"));
+    const auto committed = tile->getDescription();
+    expect(live.key(juce::KeyPress::spaceKey));
+    expect(live.key(juce::KeyPress::upKey));
+    expect(live.key(juce::KeyPress::escapeKey));
+    tile = locate();
+    expect(tile != nullptr && !tile->travelling() && tile->hasKeyboardFocus(false), "Cancel retains block focus");
+    if (tile != nullptr) expectEquals(tile->getDescription(), committed);
+  }
+};
+
+struct AudioSettingsAccessibilityTests : juce::UnitTest {
+  AudioSettingsAccessibilityTests() : juce::UnitTest("Audio settings accessibility", "ui") {}
+  void runTest() override {
+    using KP = juce::KeyPress;
+    beginTest("selectors expose a combo box, its label and read-back value");
+    SelectField device("Audio device");
+    device.setOptions({{"audient", "Audient USB Audio ASIO Driver", {}}, {"other", "Other interface", {}}});
+    device.setValue("audient");
+    auto handler = device.createAccessibilityHandler();
+    expect(handler->getRole() == juce::AccessibilityRole::comboBox);
+    expectEquals(handler->getTitle(), juce::String("Audio device"));
+    expectEquals(handler->getValueInterface()->getCurrentValueAsString(), juce::String("Audient USB Audio ASIO Driver"));
+    expect(handler->getActions().contains(juce::AccessibilityActionType::showMenu));
+    expect(device.getWantsKeyboardFocus());
+    device.setDisabled(true);
+    expect(!device.isEnabled());
+    expect(!device.getWantsKeyboardFocus());
+    expect(!device.keyPressed(KP(KP::returnKey)));
+    handler->getActions().invoke(juce::AccessibilityActionType::showMenu);
+    expect(!device.isOpen());
+
+    LiveScenario live(*this, "settings-system");
+    expect(live.ok, "a real window is required for the audio-settings keyboard test");
+    if (!live.ok) return;
+    auto& root = live.root();
+    root.openSettings(SettingsScreen::Tab::system);
+    live.pump(100);
+    auto* rate = dynamic_cast<SelectField*>(drive::find(root, [](juce::Component& c) {
+      return dynamic_cast<SelectField*>(&c) != nullptr && c.getName() == "Sample rate";
+    }));
+    expect(rate != nullptr);
+    if (rate == nullptr) return;
+    expect(rate->options().size() > 1);
+    if (rate->options().size() < 2) return;
+    // Isolate the UI interaction from real hardware and emulate the owner's
+    // read-back, as the live AudioDeviceStore does after an accepted change.
+    juce::String picked;
+    rate->onChange = [&](const juce::String& value) { picked = value; rate->setValue(value); };
+    beginTest("Enter opens the current option; polling preserves keyboard focus");
+    LiveScenario::focus(*rate);
+    expect(live.key(KP::returnKey));
+    live.pump(30);
+    expect(rate->isOpen());
+    auto* focused = live.focused();
+    expect(focused != nullptr && focused != rate);
+    if (focused != nullptr) expectEquals(focused->getName(), rate->selectedLabel());
+    const auto options = rate->options();
+    rate->setOptions(options);
+    rate->setValue(rate->value());
+    expect(live.focused() == focused, "unchanged device read-back must not destroy the focused row");
+
+    beginTest("arrows and Enter select an option and return to the named combo box");
+    expect(live.key(KP::downKey));
+    live.pump(20);
+    const auto* next = live.focused();
+    const auto expectedLabel = next != nullptr ? next->getName() : juce::String();
+    expect(live.key(KP::returnKey));
+    live.pump(30);
+    expect(picked.isNotEmpty());
+    expect(!rate->isOpen());
+    expect(live.focused() == rate);
+    expectEquals(rate->getAccessibilityHandler()->getValueInterface()->getCurrentValueAsString(), expectedLabel);
+
+    beginTest("screen-reader expand opens options; Escape cancels without changing the value");
+    const auto prior = rate->value();
+    expect(rate->getAccessibilityHandler()->getActions().invoke(juce::AccessibilityActionType::showMenu));
+    expect(rate->isOpen());
+    expect(live.key(KP::escapeKey));
+    live.pump(20);
+    expect(!rate->isOpen());
+    expect(live.focused() == rate);
+    expect(rate->value() == prior);
+    rate->onChange = nullptr;
+  }
 };
 
 // The Settings page from the keyboard, in a real window. Issue #203: a
@@ -1575,22 +2154,23 @@ struct ScrollSurfacesTests : juce::UnitTest {
       return (start >= pos() && end <= pos() + visible) || end - start > visible;
     };
     const int forward = vertical ? KP::downKey : KP::rightKey;
-    const auto middle = surface.grab ? live.at(*scroller, surface.grab(*scroller)) : live.centre(*scroller);
+    // Recompute after rewind: scrolling moves the tile that defines a lane gap.
+    const auto middle = [&] { return surface.grab ? live.at(*scroller, surface.grab(*scroller)) : live.centre(*scroller); };
 
     // A plain wheel turn pans it, whichever way it runs.
     rewind();
-    live.wheel(middle, 0.0f, -0.5f);
+    live.wheel(middle(), 0.0f, -0.5f);
     expect(pos() > 0, "the wheel pans");
 
     // A mouse drag pans it.
     rewind();
-    live.mouse().drag(middle, along(-150.0f));
+    live.mouse().drag(middle(), along(-150.0f));
     expect(pos() > 0, "a mouse drag pans");
 
     // A finger pans it, where the platform has touch sources.
     rewind();
     if (auto finger = live.finger()) {
-      finger->drag(middle, along(-150.0f));
+      finger->drag(middle(), along(-150.0f));
       expect(pos() > 0, "a touch drag pans");
     } else {
       logMessage("no touch input source on this platform; the touch pan is not exercised");
@@ -1671,7 +2251,7 @@ struct TouchScrollTests : juce::UnitTest {
     juce::DocumentWindow window("touch scroll", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto* peer = host.getPeer();
     auto* card = dynamic_cast<ToneCard*>(drive::find(host.pluginRoot(), [](juce::Component& c) {
@@ -1844,7 +2424,7 @@ struct PointerTests : juce::UnitTest {
     beginTest("the tracker follows presses, not moves");
     juce::DocumentWindow window("pointer", juce::Colours::black, 0);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(300);
     auto* peer = host.getPeer();
     expect(peer != nullptr);
@@ -1949,7 +2529,7 @@ struct PresetReorderTests : juce::UnitTest {
     juce::DocumentWindow window("preset reorder", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto* peer = host.getPeer();
     expect(peer != nullptr);
@@ -2045,7 +2625,7 @@ struct ChainCrossLaneDragTests : juce::UnitTest {
     juce::DocumentWindow window("cross-lane drag", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto* peer = host.getPeer();
     expect(peer != nullptr);
@@ -2147,7 +2727,7 @@ struct BlockSizeToggleTests : juce::UnitTest {
     juce::DocumentWindow window("block size", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto* peer = host.getPeer();
     auto& root = host.pluginRoot();
@@ -2224,7 +2804,7 @@ struct KnobReadoutTests : juce::UnitTest {
     juce::DocumentWindow window("knob readout", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto* peer = host.getPeer();
     auto& root = host.pluginRoot();
@@ -2312,7 +2892,7 @@ struct FaceplateEffectsTests : juce::UnitTest {
     juce::DocumentWindow window("faceplate effects", juce::Colours::black, 0);
     ScaledHost host(backend, *scenario, fixtures.root);
     window.setContentNonOwned(&host, true);
-    window.setVisible(true);
+    showTestWindow(window);
     pump(400);
     auto& root = host.pluginRoot();
     auto& prefs = root.services().prefs;
@@ -2461,7 +3041,7 @@ struct FaceplateDualMonoTests : juce::UnitTest {
       juce::DocumentWindow window("faceplate dual mono", juce::Colours::black, 0);
       ScaledHost host(backend, *scenario, fixtures.root);
       window.setContentNonOwned(&host, true);
-      window.setVisible(true);
+      showTestWindow(window);
       pump(400);
       auto& root = host.pluginRoot();
 
@@ -2528,7 +3108,7 @@ struct FaceplateDualMonoTests : juce::UnitTest {
       juce::DocumentWindow window("faceplate dual mono (stereo chains)", juce::Colours::black, 0);
       ScaledHost host(backend, *scenario, fixtures.root);
       window.setContentNonOwned(&host, true);
-      window.setVisible(true);
+      showTestWindow(window);
       pump(400);
       auto& root = host.pluginRoot();
 
@@ -2552,6 +3132,12 @@ HtmlTests htmlTests;
 FontTests fontTests;
 RichFlowTests richFlowTests;
 AccessibilityTests accessibilityTests;
+BrowserAccessibilityTests browserAccessibilityTests;
+ToggleContextAccessibilityTests toggleContextAccessibilityTests;
+PresetAccessibilityTests presetAccessibilityTests;
+AudioSettingsAccessibilityTests audioSettingsAccessibilityTests;
+ChainAccessibilityTests chainAccessibilityTests;
+DialogAccessibilityTests dialogAccessibilityTests;
 FocusPolicyTests focusPolicyTests;
 SettingsKeyboardTests settingsKeyboardTests;
 ScrollSurfacesTests scrollSurfacesTests;
@@ -2581,9 +3167,21 @@ ReadoutTests readoutTests;
 }  // namespace
 
 int runSelfTests() {
-  juce::UnitTestRunner runner;
+  // Preserve the last test reached if a native assertion or crash prevents
+  // the final report (GUI applications otherwise only write debugger output).
+  struct ReportingRunner : juce::UnitTestRunner {
+    void logMessage(const juce::String& message) override { std::cout << message << std::endl; }
+  } runner;
   runner.setAssertOnFailure(false);
-  runner.runTestsInCategory("ui");
+  const auto filter = juce::SystemStats::getEnvironmentVariable("T3K_UI_TEST_FILTER", "");
+  if (filter.isEmpty()) runner.runTestsInCategory("ui");
+  else {
+    juce::Array<juce::UnitTest*> selected;
+    for (auto* test : juce::UnitTest::getAllTests())
+      if (test->getCategory() == "ui" && test->getName().containsIgnoreCase(filter)) selected.add(test);
+    if (selected.isEmpty()) { std::cout << "No UI tests match the filter" << std::endl; return 1; }
+    runner.runTests(selected);
+  }
   int failures = 0;
   for (int i = 0; i < runner.getNumResults(); ++i) {
     const auto* r = runner.getResult(i);

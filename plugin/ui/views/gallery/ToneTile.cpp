@@ -63,6 +63,9 @@ void ToneTile::setBlock(const ChainItem& block) {
   enabled_ = block.params.enabled;
   setHelpText(help::toneTile(block.tone.title));
   setTitle(block.tone.title);
+  power_.setTitle("Enable " + block.tone.title);
+  swap_.setTitle("Replace " + block.tone.title);
+  remove_.setTitle("Remove " + block.tone.title);
   image_.setTone(block.tone.image, block.tone.gear, block.tone.local, kGlyphSize);
   syncState();
 }

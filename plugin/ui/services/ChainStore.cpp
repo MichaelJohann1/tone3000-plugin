@@ -1,4 +1,5 @@
 #include "ChainStore.h"
+#include "core/Help.h"
 
 namespace t3k::ui {
 
@@ -13,8 +14,35 @@ ChainStore::~ChainStore() { clock_.removeListener(this); }
 void ChainStore::refresh(bool force) {
   const auto res = backend_.getChainState(force ? -1 : state_.revision);
   if (!res.isObject() || ChainState::isUnchanged(res)) return;
-  state_ = ChainState::parse(res);
+  auto next = ChainState::parse(res);
+  const auto feedback = state_.revision < 0 ? juce::String() : loadingFeedback(state_, next);
+  state_ = std::move(next);
   listeners.call([this](Listener& l) { l.chainChanged(state_); });
+  help::announce(feedback);
+}
+
+juce::String ChainStore::loadingFeedback(const ChainState& before, const ChainState& after) {
+  juce::StringArray messages;
+  const auto status = [](const ChainItem& item) {
+    return item.loadFailed ? 2 : (item.modelLoading || !item.loaded ? 0 : 1);
+  };
+  const auto inspect = [&](const std::vector<ChainItem>& items, const juce::String& side) {
+    for (size_t i = 0; i < items.size(); ++i) {
+      const auto& item = items[i];
+      if (!item.isTone()) continue;
+      const auto* old = before.findBlock(item.blockId);
+      const bool changedModel = old != nullptr &&
+          (old->activeModelId != item.activeModelId || old->tone.id != item.tone.id || old->tone.title != item.tone.title);
+      if (old != nullptr && old->isTone() && status(*old) == status(item) && !changedModel) continue;
+      const auto label = item.tone.title + ", " + side + "position " + juce::String(static_cast<int>(i) + 1);
+      if (status(item) == 2) messages.add("Could not load " + label + ". Use Retry load to try again.");
+      else if (status(item) == 0) messages.add("Loading " + label);
+      else messages.add("Loaded " + label);
+    }
+  };
+  inspect(after.chain, after.stereoEnabled ? "left chain, " : "");
+  if (after.stereoEnabled && after.chainRight) inspect(*after.chainRight, "right chain, ");
+  return messages.joinIntoString(". ");
 }
 
 void ChainStore::tick() {
@@ -121,11 +149,16 @@ bool ChainStore::swapChains() {
 }
 
 bool ChainStore::setBranch(ChainSide side, const std::string& afterBlockId) {
-  return run([&] { return backend_.setChainBranch(toString(side), afterBlockId); });
+  const bool changed = run([&] { return backend_.setChainBranch(toString(side), afterBlockId); });
+  help::announce(changed ? "Branch set. The other chain receives audio after this effect."
+                         : "Could not set branch. Branching requires Stereo mode and a loaded effect.");
+  return changed;
 }
 
 bool ChainStore::clearBranch() {
-  return run([&] { return backend_.clearChainBranch(); });
+  const bool changed = run([&] { return backend_.clearChainBranch(); });
+  help::announce(changed ? "Branch removed. Chains are independent." : "Could not remove branch.");
+  return changed;
 }
 
 void ChainStore::setBlockParam(const std::string& blockId, const juce::String& param, double value) {

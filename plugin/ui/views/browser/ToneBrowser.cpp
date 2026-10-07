@@ -241,6 +241,7 @@ void ToneBrowser::pick(const Tone& tone) {
     pickError_ = kPickError;
     pickingId_.reset();
     rebuildBody();
+    help::announce(pickError_);
   }));
 }
 

@@ -90,9 +90,10 @@ Knob::Knob(Options options) : options_(std::move(options)) {
   setMouseCursor(juce::MouseCursor::PointingHandCursor);
   setViewportIgnoreDragFlag(true);  // a touch drag turns the knob, not the page
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(false);  // Tab reaches a knob; a click leaves the host's keys alone
+  setMouseClickGrabsKeyboardFocus(true);
   setTitle(options_.label);
   if (options_.help) setHelpText(help::text(*options_.help));
+  setHelpText(getHelpText() + " Left/Right: adjust. Shift+Left/Right: fine adjustment. Home/End: minimum/maximum. Enter: type a value. In menus, Up/Down navigates; Tab/Shift+Tab also moves between controls.");
   live_ = emitted_ = value_ = juce::jlimit(options_.min, options_.max, options_.min);
 }
 
@@ -119,13 +120,19 @@ void Knob::setValue(float normalised) {
   value_ = v;
   repaint();
   syncReadout();
+  if (auto* handler = getAccessibilityHandler())
+    handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
 }
 
 void Knob::emit(float v) {
+  const bool changed = !juce::exactlyEqual(value_, v);
   emitted_ = v;
   value_ = v;
   repaint();
   syncReadout();
+  if (changed)
+    if (auto* handler = getAccessibilityHandler())
+      handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
   if (onChange) onChange(v);
 }
 
@@ -254,6 +261,8 @@ void Knob::nudgeTo(float normalised) {
 
 bool Knob::keyPressed(const juce::KeyPress& key) {
   using KP = juce::KeyPress;
+  if (key.isKeyCode(KP::upKey) || key.isKeyCode(KP::downKey))
+    if (auto* menu = findParentComponentOfClass<Popover>()) return menu->keyPressed(key);
   // A detented knob steps one detent per press (fine has nothing to refine).
   const float step = options_.steps ? (options_.max - options_.min) / static_cast<float>(*options_.steps - 1)
                      : key.getModifiers().isShiftDown() ? kKeyStep / kFineFactor
@@ -301,7 +310,10 @@ private:
 
 std::unique_ptr<juce::AccessibilityHandler> Knob::createAccessibilityHandler() {
   juce::AccessibilityHandler::Interfaces interfaces;
-  interfaces.value = std::make_unique<KnobValue>(*this, options_, [this](float v) { nudgeTo(v); });
+  interfaces.value = std::make_unique<KnobValue>(*this, options_, [this](float v) {
+    if (isShowing()) grabKeyboardFocus();
+    nudgeTo(v);
+  });
   return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::slider,
                                                       juce::AccessibilityActions(), std::move(interfaces));
 }
@@ -378,6 +390,7 @@ void Knob::commitEdit() {
 
 void Knob::closeEditor() {
   if (editor_ == nullptr) return;
+  const bool restoreFocus = editor_->hasKeyboardFocus(true);
   // Hiding the editor drops its focus, which would re-enter through onBlur:
   // detach first, delete once the stack has unwound.
   auto editor = std::move(editor_);
@@ -387,6 +400,7 @@ void Knob::closeEditor() {
   removeChildComponent(editor.get());
   auto* raw = editor.release();
   juce::MessageManager::callAsync([raw] { delete raw; });
+  if (restoreFocus && isShowing()) grabKeyboardFocus();
   repaint();
   syncReadout();
 }

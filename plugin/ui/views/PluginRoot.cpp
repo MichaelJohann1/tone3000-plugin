@@ -4,6 +4,8 @@
 #include "core/Help.h"
 #include "core/NoDefaultFocus.h"
 #include "core/Theme.h"
+#include "widgets/SecondaryPress.h"
+#include "views/gallery/GalleryTile.h"
 
 namespace t3k::ui {
 
@@ -71,7 +73,6 @@ PluginRoot::PluginRoot(Services& services)
   addAndMakeVisible(overlay_);
   overlay_.addChildComponent(toast_);
 
-  addMouseListener(&focusPolicy_, true);
   services_.hints.addListener(this);
   services_.banners.addListener(this);
   services_.connection.addListener(this);
@@ -83,10 +84,17 @@ PluginRoot::PluginRoot(Services& services)
   connectionProblemChanged();
   updateNoticeChanged();
   authFlowChanged();
+  // Queue after the initial store notifications so the sample is present
+  // when the host first hands keyboard focus to this editor.
+  if (juce::SystemStats::getEnvironmentVariable("T3K_DIALOG_PREVIEW", "") == "1"
+      && juce::SystemStats::getEnvironmentVariable("T3K_DIALOG_PREVIEW_ON_OPEN", "") == "1") {
+    juce::MessageManager::callAsync([self = juce::Component::SafePointer(this)] {
+      if (self != nullptr) self->previewDialog(0);
+    });
+  }
 }
 
 PluginRoot::~PluginRoot() {
-  removeMouseListener(&focusPolicy_);
   if (keyWindow_ != nullptr) keyWindow_->removeKeyListener(&focusPolicy_);
   services_.session.onAuthenticated = nullptr;
   services_.loadFlow.onShowBrowser = nullptr;
@@ -117,6 +125,10 @@ juce::Image PluginRoot::snapshotBeneathOverlay(float scale) {
 
 template <typename Modal, typename... Args>
 std::unique_ptr<Modal> PluginRoot::openModal(Args&&... args) {
+  if (frontModal() == nullptr && modalReturnFocus_ == nullptr) {
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    if (focused != nullptr && isParentOf(focused)) modalReturnFocus_ = focused;
+  }
   auto modal = std::make_unique<Modal>([this](float scale) { return snapshotBeneathOverlay(scale); },
                                        std::forward<Args>(args)...);
   modal->setBounds(getLocalBounds());
@@ -127,6 +139,50 @@ std::unique_ptr<Modal> PluginRoot::openModal(Args&&... args) {
 void PluginRoot::restackModals() {
   if (updateNotice_) updateNotice_->toFront(false);
   if (connectionModal_) connectionModal_->toFront(false);
+  auto* top = frontModal();
+  for (auto* dialog : {static_cast<ModalLayer*>(updateNotice_.get()), static_cast<ModalLayer*>(connectionModal_.get())})
+    if (dialog != nullptr && dialog != top) dialog->cancelPendingFocus();
+  if (top != nullptr) {
+    if (focusedModal_ != top) {
+      focusedModal_ = top;
+      top->focusFirstControl();
+    }
+  } else {
+    focusedModal_ = nullptr;
+    if (modalReturnFocus_ != nullptr && modalReturnFocus_->isShowing() && modalReturnFocus_->isEnabled())
+      modalReturnFocus_->grabKeyboardFocus();
+    modalReturnFocus_ = nullptr;
+  }
+}
+
+ModalLayer* PluginRoot::frontModal() const {
+  if (connectionModal_) return connectionModal_.get();
+  return updateNotice_.get();
+}
+
+// Opt-in local QA path: no version endpoint, download, or saved snooze.
+void PluginRoot::previewDialog(int kind) {
+  if (frontModal() != nullptr) return;
+  const auto close = [self = juce::Component::SafePointer(this)] {
+    juce::MessageManager::callAsync([self] {
+      if (self == nullptr) return;
+      self->updateNotice_.reset();
+      self->connectionModal_.reset();
+      self->restackModals();
+    });
+  };
+  if (kind == 0) {
+    auto modal = openModal<UpdateNotice>(UpdateInfo{"0.0.0-test",
+        "<p>This is an accessibility test. No update is required. Tab through the buttons, then press Escape to close.</p>", ""});
+    modal->onRemindLater = [close](int) { close(); };
+    updateNotice_ = std::move(modal);
+  } else {
+    auto modal = openModal<ConnectionModal>(kind == 1 ? ConnectionGate::Problem::offline : ConnectionGate::Problem::insecure, false);
+    modal->onDismiss = close;
+    modal->onRetry = close;
+    connectionModal_ = std::move(modal);
+  }
+  restackModals();
 }
 
 // The sign-in screen is up exactly while the flow is not idle; the screen
@@ -161,7 +217,7 @@ void PluginRoot::connectionProblemChanged() {
     if (self == nullptr) return;
     const auto& problem = self->services_.connection.problem();
     self->connectionModal_.reset();
-    if (!problem) return;
+    if (!problem) { self->restackModals(); return; }
     auto& s = self->services_;
     auto modal = self->openModal<ConnectionModal>(*problem, s.backend.canOpenDateTimeSettings());
     modal->onRetry = [&s] { s.connection.retry(); };
@@ -177,7 +233,7 @@ void PluginRoot::updateNoticeChanged() {
     if (self == nullptr) return;
     const auto& notice = self->services_.updates.notice();
     self->updateNotice_.reset();
-    if (!notice) return;
+    if (!notice) { self->restackModals(); return; }
     auto& s = self->services_;
     auto modal = self->openModal<UpdateNotice>(*notice);
     modal->onRemindLater = [&s](int days) { s.updates.remindLater(days); };
@@ -265,6 +321,38 @@ std::unique_ptr<juce::ComponentTraverser> PluginRoot::createKeyboardFocusTravers
 }
 
 bool PluginRoot::FocusPolicy::keyPressed(const juce::KeyPress& key, juce::Component*) {
+  if ((key.isKeyCode(juce::KeyPress::F10Key) && key.getModifiers().isShiftDown())
+#if JUCE_WINDOWS
+      || key.isKeyCode(kWindowsApplicationsKey)
+#endif
+      ) {
+    if (root_.frontModal() != nullptr) return false;
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    for (auto* c = focused; c != nullptr && root_.isParentOf(c); c = c->getParentComponent()) {
+      if (auto* target = dynamic_cast<SecondaryPressTarget*>(c)) {
+        target->keyboardContextMenu();
+        return true;
+      }
+      if (auto* tile = dynamic_cast<GalleryTile*>(c))
+        return tile->keyPressed(juce::KeyPress(juce::KeyPress::F10Key, juce::ModifierKeys::shiftModifier, 0));
+    }
+  }
+  if (key.getModifiers().isCtrlDown() && key.getModifiers().isAltDown() && key.getModifiers().isShiftDown()
+      && juce::SystemStats::getEnvironmentVariable("T3K_DIALOG_PREVIEW", "") == "1") {
+    if (key.isKeyCode('U')) { root_.previewDialog(0); return true; }
+    if (key.isKeyCode('O')) { root_.previewDialog(1); return true; }
+    if (key.isKeyCode('S')) { root_.previewDialog(2); return true; }
+  }
+  if (auto* modal = root_.frontModal()) {
+    if (key == juce::KeyPress::escapeKey || key.isKeyCode(juce::KeyPress::tabKey))
+      return modal->keyPressed(key);
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    if (focused == nullptr || !modal->isParentOf(focused)) {
+      modal->focusFirstControl();
+      return true; // never activate a control behind the dialog
+    }
+    return false;
+  }
   // Focus resting on the window itself (a standalone DocumentWindow takes
   // it when the OS activates it) is nothing focused as far as the UI goes.
   auto* focused = juce::Component::getCurrentlyFocusedComponent();
@@ -288,6 +376,18 @@ bool PluginRoot::FocusPolicy::keyPressed(const juce::KeyPress& key, juce::Compon
   return scroller != nullptr && scroller->scrollByKey(key);
 }
 
+bool PluginRoot::FocusPolicy::keyStateChanged(bool, juce::Component*) {
+#if JUCE_WINDOWS
+  // JUCE reports VK_APPS through key-state callbacks rather than keyPressed.
+  const bool down = juce::KeyPress::isKeyCurrentlyDown(kWindowsApplicationsKey);
+  const bool invoke = down && !applicationsKeyDown_;
+  applicationsKeyDown_ = down;
+  if (invoke)
+    return keyPressed(juce::KeyPress(kWindowsApplicationsKey), nullptr);
+#endif
+  return false;
+}
+
 SettingsScreen* PluginRoot::settingsInFront() const {
   // A modal over the page takes the keyboard with it.
   if (updateNotice_ != nullptr || connectionModal_ != nullptr) return nullptr;
@@ -300,18 +400,6 @@ DragScroller* PluginRoot::frontScroller() {
   if (tunerShown() || signInShown()) return nullptr;  // neither screen scrolls
   if (browserShown()) return &browser_->scroller();
   return &main_.chainScreen().scroller();
-}
-
-void PluginRoot::FocusPolicy::mouseDown(const juce::MouseEvent& e) {
-  // Runs after the pressed component's own mouseDown, so a click that gave
-  // focus (a text field) has already done so: keep focus when it sits on the
-  // pressed component's line of ancestry either way (an editor inside its
-  // field, a row inside its popover).
-  auto* focused = juce::Component::getCurrentlyFocusedComponent();
-  auto* pressed = e.eventComponent;
-  if (focused == nullptr || pressed == nullptr || !root_.isParentOf(focused)) return;
-  if (focused == pressed || focused->isParentOf(pressed) || pressed->isParentOf(focused)) return;
-  focused->giveAwayKeyboardFocus();
 }
 
 bool PluginRoot::keyPressed(const juce::KeyPress& key) {
@@ -362,10 +450,15 @@ void PluginRoot::setTunerShown(bool shown) {
   syncTakeovers();
   header_.setTunerShown(shown);
   resized();
+  if (shown && tuner_->isShowing()) tuner_->grabKeyboardFocus();
+  else if (!shown && header_.isShowing()) {
+    header_.focusTunerButton();
+  }
 }
 
 void PluginRoot::setBrowserShown(bool shown) {
   if (shown == browserShown()) return;
+  const bool transferFocus = hasKeyboardFocus(true);
   if (shown) {
     browser_ = std::make_unique<ToneBrowser>(services_);
     // Closing without picking abandons any pending swap / insert target.
@@ -386,6 +479,15 @@ void PluginRoot::setBrowserShown(bool shown) {
   }
   syncTakeovers();
   resized();
+  if (transferFocus) {
+    juce::MessageManager::callAsync([self = juce::Component::SafePointer(this), shown] {
+      if (self == nullptr || self->browserShown() != shown || self->hasKeyboardFocus(true)) return;
+      auto* target = shown ? static_cast<juce::Component*>(self->browser_.get())
+                          : static_cast<juce::Component*>(&self->main_);
+      const auto order = juce::KeyboardFocusTraverser().getAllComponents(target);
+      if (!order.empty()) order.front()->grabKeyboardFocus();
+    });
+  }
 }
 
 // What a takeover covers is hidden, not left painting underneath: the meters

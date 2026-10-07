@@ -27,7 +27,7 @@ public:
   virtual void tileDragStart(GalleryTile& tile, const juce::MouseEvent& e) = 0;
   virtual void tileDragMove(const juce::MouseEvent& e) = 0;
   virtual void tileDragEnd(const juce::MouseEvent& e) = 0;
-  // Space/Enter picks up or drops; arrows move; Escape cancels. Returns
+  // Space picks up; Space/Enter drops; arrows move; Escape cancels. Returns
   // whether the key was consumed.
   virtual bool tileKey(GalleryTile& tile, const juce::KeyPress& key) = 0;
 };

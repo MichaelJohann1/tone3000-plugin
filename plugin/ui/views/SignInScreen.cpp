@@ -262,6 +262,8 @@ void SignInScreen::rebuild() {
   columnHeight_ = 0;
   for (const auto& row : rows_) columnHeight_ += row.gapBefore + row.height;
   layoutColumn();
+  setTitle("Sign in to TONE3000");
+  setDescription(headline);
   if (headline != announced_) {
     announced_ = headline;
     help::announce(headline);

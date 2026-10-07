@@ -15,20 +15,11 @@
 //     already has
 //   shown --banner clears--> hidden: the strip goes and the window shrinks.
 //
-// Keyboard focus works as a browser's does: nothing is focused by default.
-// A text field takes focus from a click; every other control only from
-// Tab / Shift+Tab or from code asking (a popover opening, a field's
-// focus()), never from a click (Clickable). JUCE would otherwise hand focus
-// to the first focusable component whenever the focused one goes away or
-// the window activates, which put the caret in the tone browser's search
-// box on some visits and not others. The root is the keyboard focus
-// container with a traverser that names no default; Tab with nothing
-// focused enters the tab order at either end; Escape or a press elsewhere
-// drops the focus again. The scroll keys with nothing focused move the
-// screen in front's main scroller (frontScroller), as a browser scrolls
-// its document. Keys nothing takes (Space and Enter with nothing focused,
-// Space with a button or knob focused) fall through to the host as its
-// transport keys (NativeEditor).
+// Controls take focus on click, keyboard navigation and screen-reader
+// activation. Background presses retain focus; popovers and dialogs move
+// focus into their controls and restore it on close. No default control is
+// focused on initial activation. Tab enters the visible screen, and keys
+// not handled by a control can pass to the host through NativeEditor.
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -119,6 +110,10 @@ private:
   template <typename Modal, typename... Args>
   std::unique_ptr<Modal> openModal(Args&&... args);
   void restackModals();
+  ModalLayer* frontModal() const;
+  void previewDialog(int kind);
+  juce::Component::SafePointer<juce::Component> modalReturnFocus_;
+  juce::Component::SafePointer<ModalLayer> focusedModal_;
   void updateChromeHeight();
   // Banner phase machine.
   bool viewportFits() const;
@@ -167,17 +162,17 @@ private:
   // The focus rules a browser has and JUCE lacks. Keys with nothing
   // focused go to the window's component, which we are inside of, not
   // above, so Tab-from-nothing and the scroll keys for the screen in
-  // front's scroller listen on the window. A press outside the focused
-  // control drops its focus, so a Tab-focused button never keeps Enter
-  // from the host once the user is back on the mouse.
-  class FocusPolicy : public juce::KeyListener, public juce::MouseListener {
+  // front's scroller listen on the window. Mouse interaction retains
+  // focus inside the plugin for screen-reader users.
+  class FocusPolicy : public juce::KeyListener {
   public:
     explicit FocusPolicy(PluginRoot& root) : root_(root) {}
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
-    void mouseDown(const juce::MouseEvent& e) override;
+    bool keyStateChanged(bool isKeyDown, juce::Component*) override;
 
   private:
     PluginRoot& root_;
+    bool applicationsKeyDown_ = false;
   };
   FocusPolicy focusPolicy_{*this};
   juce::Component::SafePointer<juce::Component> keyWindow_;

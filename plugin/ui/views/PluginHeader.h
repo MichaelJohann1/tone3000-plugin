@@ -22,6 +22,7 @@ public:
   PresetBar& presetBar() { return presetBar_; }
 
   void setTunerShown(bool shown);
+  void focusTunerButton() { if (tuner_.isShowing()) tuner_.grabKeyboardFocus(); }
 
   std::function<void(bool show)> onToggleTuner;
   std::function<void(bool stereo)> onStereoToggle;

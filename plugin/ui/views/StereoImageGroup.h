@@ -43,6 +43,7 @@ public:
   // Right-click anywhere on the group toggles the deck.
   void mouseDown(const juce::MouseEvent& e) override;
   void secondaryPress(const juce::MouseEvent&) override { toggleDeck(); }
+  void keyboardContextMenu() override { toggleDeck(); }
 
 private:
   class Advert;

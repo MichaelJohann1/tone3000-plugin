@@ -24,6 +24,14 @@ constexpr float kBadgeGap = 6;
 ToneCard::ToneCard(ImageLoader& images, const Tone& tone)
     : Clickable(tone.title), tone_(tone), image_(images) {
 
+  juce::String explanation = tone_.description.trim();
+  if (explanation.isEmpty()) {
+    for (const auto& gear : labels::gearFilters())
+      if (tone_.gear == gear.id) { explanation = gear.description; break; }
+    if (explanation.isEmpty()) explanation = "No description supplied by the creator.";
+  }
+  setHelpText(explanation + " Enter or Space: select this tone.");
+
   image_.setCornerRadius(kImageCorner);
   image_.setTone(tone_.images.empty() ? juce::String() : tone_.images.front(), tone_.gear, /*local=*/false);
   addAndMakeVisible(image_);

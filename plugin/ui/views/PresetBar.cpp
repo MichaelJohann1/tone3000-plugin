@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/Fonts.h"
+#include "core/DelayedCall.h"
 #include "core/Help.h"
 #include "core/Icons.h"
 #include "core/Paint.h"
@@ -98,6 +99,7 @@ public:
   void set(const juce::String& text, bool active) {
     text_ = text;
     active_ = active;
+    setTitle(active ? "Presets: " + text : juce::String("Presets"));
     repaint();
   }
   void paintButton(juce::Graphics& g, bool, bool) override {
@@ -120,10 +122,13 @@ public:
   static constexpr int kButtonHeight = 35;
 
   explicit SavePanel(PresetBar& owner) : owner_(owner) {
+    setTitle("Save preset");
     setSize(kWidth, kBorder * 2 + kPad + kTitleHeight + 12 + kInputHeight + 12 + kButtonHeight + kPad);
     name_.setPlaceholder("Name");
+    name_.setAccessibleLabel("Preset name");
     name_.onChange = [this](const juce::String&) { repaint(); };
     name_.onEnter = [this] { save(); };
+    name_.onEscape = [this] { dismiss(); };
     addAndMakeVisible(name_);
     saveButton_.onClick = [this] { save(); };
     saveButton_.setMouseCursor(juce::MouseCursor::PointingHandCursor);
@@ -188,10 +193,19 @@ public:
   static constexpr int kSearchHeight = 33;  // 13px text + 8px padding + 1px border
 
   explicit BrowsePanel(PresetBar& owner) : owner_(owner) {
+    setTitle("Search and load presets");
     search_.setPlaceholder("Search presets");
+    search_.onEscape = [this] { dismiss(); };
     search_.setPadding(8, 32, 12);
     search_.setLeadingIcon(Icon::Search, 14, 12, kMutedText);
-    search_.onChange = [this](const juce::String&) { rebuild(); };
+    search_.onChange = [this](const juce::String&) {
+      rebuild();
+      searchAnnouncement_.start(350, [this] {
+        if (!isOpen()) return;
+        help::announce(rows_.empty() ? juce::String("No matching presets")
+                                    : juce::String(static_cast<int>(rows_.size())) + " presets found");
+      });
+    };
     addAndMakeVisible(search_);
 
     pcToggle_.onClick = [this] {
@@ -265,6 +279,7 @@ private:
 
   PresetBar& owner_;
   TextField search_;
+  DelayedCall searchAnnouncement_;
   GlyphButton pcToggle_{Icon::MidiPort, 15, 7, help::Key::presetPcToggle};
   GlyphButton reorderToggle_{Icon::ArrowUpDown, 15, 7, help::Key::presetReorder};
   DragScroller viewport_{DragScroller::Axis::vertical, DragScroller::Keys::none};  // the arrows walk the rows
@@ -290,6 +305,7 @@ public:
 
     if (renaming_) {
       rename_ = std::make_unique<TextField>();
+      rename_->setAccessibleLabel("Preset name");
       rename_->setPadding(4, 8, 8);
       rename_->setCornerRadius(6);
       rename_->setText(preset_.name);
@@ -311,12 +327,14 @@ public:
       addAndMakeVisible(*grip_);
     } else if (!preset_.factory && !renaming_) {
       pencil_ = std::make_unique<GlyphButton>(Icon::Pencil, 13, 3, help::Key::presetRename);
+      pencil_->setTitle("Rename " + preset_.name);
       pencil_->onClick = [this] {
         panel_.renamingId_ = preset_.id;
         panel_.rebuild();
       };
       addAndMakeVisible(*pencil_);
       trash_ = std::make_unique<GlyphButton>(Icon::Trash2, 13, 3, help::Key::presetDelete);
+      trash_->setTitle("Delete " + preset_.name);
       trash_->onClick = [this] { panel_.owner_.services_.presets.remove(preset_.id); };
       addAndMakeVisible(*trash_);
     }
@@ -380,7 +398,10 @@ public:
 private:
   class NameButton : public Clickable {
   public:
-    NameButton(const juce::String& text, bool active) : Clickable(text), text_(text), active_(active) {}
+    NameButton(const juce::String& text, bool active) : Clickable(text), text_(text), active_(active) {
+      setToggleable(true);
+      setToggleState(active, juce::dontSendNotification);
+    }
     void paintButton(juce::Graphics& g, bool, bool) override {
       paint::text(g, text_, getLocalBounds(), Fonts::sans(14), active_ ? theme::kWhite : kMutedText);
     }
@@ -635,9 +656,15 @@ void PresetBar::step(int direction) {
 }
 
 void PresetBar::loadAndClose(const juce::String& id) {
+  // The id can belong to a row destroyed when the panel rebuilds.
+  const juce::String presetId = id;
+  juce::String presetName = id;
+  for (const auto& preset : presets())
+    if (preset.id == presetId) presetName = preset.name;
   closePanels();
   if (beforeLoad) beforeLoad();
-  services_.presets.load(id);
+  const bool loaded = services_.presets.load(presetId);
+  help::announce((loaded ? "Preset selected: " : "Could not load preset: ") + presetName);
 }
 
 void PresetBar::openSavePanel() {

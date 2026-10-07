@@ -141,6 +141,8 @@ private:
     Row(const ModeOption& option, bool selected)
         : Clickable(option.label), option_(option), selected_(selected) {
       setHelpText(help::text(option.help));
+      setToggleable(true);
+      setToggleState(selected, juce::dontSendNotification);
       setMouseCursor(juce::MouseCursor::PointingHandCursor);
     }
     InputMode mode() const { return option_.mode; }
@@ -168,9 +170,10 @@ private:
         const ModeOption& option =
             stereoChains && entry.mode == InputMode::stereo ? kStereoChainsOption : entry;
         auto row = std::make_unique<Row>(option, option.mode == mode);
-        row->onClick = [this, onPick, m = option.mode] {
+        row->onClick = [this, onPick, m = option.mode, label = juce::String(option.label)] {
           close();
           onPick(m);
+          help::announce(label + " selected");
         };
         addAndMakeVisible(*row);
         rows_.push_back(std::move(row));
@@ -288,9 +291,16 @@ void Faceplate::prefChanged(const juce::String& key) {
 }
 
 void Faceplate::showEffect(juce::Component& group, bool show) {
+  show = show || group.hasKeyboardFocus(true);
   if (group.isVisible() == show) return;
   group.setVisible(show);
   resized();
+}
+
+void Faceplate::focusOfChildComponentChanged(FocusChangeType) {
+  juce::MessageManager::callAsync([self = juce::Component::SafePointer(this)] {
+    if (self != nullptr) self->syncFlags();
+  });
 }
 
 void Faceplate::syncFlags() {

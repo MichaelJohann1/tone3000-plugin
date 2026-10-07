@@ -33,6 +33,7 @@ public:
   // power button forward theirs here.
   void mouseDown(const juce::MouseEvent& e) override;
   void secondaryPress(const juce::MouseEvent&) override { toggleDeck(); }
+  void keyboardContextMenu() override { toggleDeck(); }
 
 private:
   void toggleDeck();

@@ -44,6 +44,7 @@ public:
 
   void paint(juce::Graphics& g) override;
   void resized() override;
+  void focusOfChildComponentChanged(FocusChangeType) override;
 
 private:
   class InputModeButton;

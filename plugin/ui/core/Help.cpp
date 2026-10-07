@@ -256,7 +256,11 @@ std::map<Key, String> buildTable() {
   t[Key::cpuLoad] = U("CPU: audio engine load.");
   t[Key::hideHints] = U("Hide Info Bar: hide this bar. Re-enable in Settings.");
 
-  for (auto& [key, value] : t) value = touchify(value);
+  for (auto& [key, value] : t) {
+    value = touchify(value);
+    if (!kTouch && value.contains("Right-click: advanced."))
+      value = value.replace("Right-click: advanced.", "Right-click or Shift+F10: advanced. On Windows, the Applications key also opens advanced.");
+  }
   return t;
 }
 
@@ -276,8 +280,8 @@ const String& text(Key key) {
 }
 
 String toneTile(const String& title) {
-  return kTouch ? title + U(". Tap: open · drag: reorder · touch and hold: menu.")
-                : title + U(". Click: open · drag: reorder · ") + alt("drag") +
+  return kTouch ? title + U(". Tap to adjust parameters for this effect · drag: reorder · touch and hold: menu.")
+                : title + U(". Click or press Enter to adjust parameters for this effect · drag: reorder · ") + alt("drag") +
                       ": duplicate · right-click: copy / load file.";
 }
 

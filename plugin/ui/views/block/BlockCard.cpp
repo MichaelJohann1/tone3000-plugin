@@ -107,6 +107,7 @@ BlockCard::~BlockCard() {
 
 // Construction
 void BlockCard::buildHeader() {
+  pre_.setToggleable(true);
   power_.onClick = [this] {
     enabled_ = !enabled_;
     services_.chain.setBlockParam(block_.blockId, "enabled", enabled_);

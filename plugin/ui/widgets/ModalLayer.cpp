@@ -1,6 +1,8 @@
 #include "ModalLayer.h"
+#include <algorithm>
 
 #include "core/Blur.h"
+#include "core/Help.h"
 #include "core/Theme.h"
 
 namespace t3k::ui {
@@ -8,6 +10,38 @@ namespace t3k::ui {
 ModalLayer::ModalLayer(Backdrop backdrop) : backdrop_(std::move(backdrop)) {
   setOpaque(true);
   setWantsKeyboardFocus(true);
+  setFocusContainerType(FocusContainerType::keyboardFocusContainer);
+}
+
+void ModalLayer::focusFirstControl() {
+  pendingFocus_ = true;
+  if (!isShowing() || getPeer() == nullptr || !getPeer()->isFocused()) return;
+  pendingFocus_ = false;
+  const auto order = juce::KeyboardFocusTraverser().getAllComponents(this);
+  if (order.empty()) grabKeyboardFocus();
+  else order.front()->grabKeyboardFocus();
+  help::announce(getTitle() + ". " + getDescription());
+}
+
+void ModalLayer::timerCallback() {
+  refresh();
+  if (pendingFocus_) focusFirstControl();
+}
+
+bool ModalLayer::keyPressed(const juce::KeyPress& key) {
+  if (key == juce::KeyPress::escapeKey) {
+    if (onEscape) onEscape();
+    return true;
+  }
+  if (!key.isKeyCode(juce::KeyPress::tabKey)) return false;
+  const auto order = juce::KeyboardFocusTraverser().getAllComponents(this);
+  if (order.empty()) return true;
+  const auto at = std::find(order.begin(), order.end(), getCurrentlyFocusedComponent());
+  const int count = static_cast<int>(order.size());
+  const int index = at == order.end() ? (key.getModifiers().isShiftDown() ? 0 : -1)
+                                    : static_cast<int>(at - order.begin());
+  order[static_cast<size_t>((index + (key.getModifiers().isShiftDown() ? count - 1 : 1)) % count)]->grabKeyboardFocus();
+  return true;
 }
 
 std::unique_ptr<juce::AccessibilityHandler> ModalLayer::createAccessibilityHandler() {
