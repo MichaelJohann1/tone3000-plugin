@@ -222,7 +222,7 @@ std::map<Key, String> buildTable() {
       U("Calibration: active — levels set from this model’s calibration data.");
   t[Key::blockUncalibrated] = U("Calibration: inactive — this model has no calibration data.");
   t[Key::eqToggle] = U("EQ: 6-band EQ editor. Outline: EQ shaping the sound.");
-  t[Key::toneInfo] = U("Info: tone description, makes, and tags from TONE3000.");
+  t[Key::toneInfo] = U("Info: use, capture settings and included gear. Tab to the overview, More info for the creator description, or View on TONE3000 for the web page.");
   t[Key::toneInfoLogin] = U("Log In: sign in to TONE3000 to see tone details.");
   t[Key::viewOnT3k] = U("View on TONE3000: open this tone in your browser.");
   t[Key::favoriteTone] = U("Favorite: save this tone to your TONE3000 favorites.");

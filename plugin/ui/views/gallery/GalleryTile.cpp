@@ -1,6 +1,7 @@
 #include "GalleryTile.h"
 
 #include "GalleryGeometry.h"
+#include "widgets/SecondaryPress.h"
 
 namespace t3k::ui {
 
@@ -168,7 +169,8 @@ bool GalleryTile::keyPressed(const juce::KeyPress& key) {
     open();
     return true;
   }
-  if (!travelling_ && key.isKeyCode(juce::KeyPress::F10Key) && key.getModifiers().isShiftDown()) {
+  if (!travelling_ && ((key.isKeyCode(juce::KeyPress::F10Key) && key.getModifiers().isShiftDown()) ||
+                       key.isKeyCode(kWindowsApplicationsKey))) {
     openMenu(getLocalBounds().getCentre());
     return true;
   }

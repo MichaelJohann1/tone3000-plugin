@@ -26,6 +26,7 @@
 #include "core/TextFlow.h"
 #include "model/ChainState.h"
 #include "model/Tone.h"
+#include "model/ToneOverview.h"
 #include "model/ToneQuery.h"
 #include "services/ConnectionGate.h"
 #include "services/LoopbackServer.h"
@@ -37,6 +38,7 @@
 #include "views/browser/FilterChip.h"
 #include "views/browser/Paginator.h"
 #include "views/browser/ToneCard.h"
+#include "views/block/BlockInfoPanel.h"
 #include "views/gallery/GalleryGeometry.h"
 #include "views/gallery/GalleryTile.h"
 #include "views/gallery/AddTile.h"
@@ -798,6 +800,65 @@ struct DragScrollerTests : juce::UnitTest {
 struct ToneModelTests : juce::UnitTest {
   ToneModelTests() : juce::UnitTest("Tone", "ui") {}
   void runTest() override {
+    beginTest("overview extracts stated facts and keeps original creator copy");
+    const auto described = Tone::parse(juce::JSON::parse(
+        R"({"id":999,"gear":"amp","description":"Subscribe to my newsletter!\nUse: crunchy rhythm guitar\nAMP SETTINGS:\nBass: 2.5\nTreble: 7\n\nIncludes: preamp only; no cabinet"})"));
+    const auto overview = toneOverview(described, "Crunch B2.5 T7");
+    expect(overview.contains("Use: crunchy rhythm guitar"));
+    expect(overview.contains("Bass: 2.5; Treble: 7"));
+    expect(overview.contains("Includes: preamp only; no cabinet"));
+    expect(overview.contains("Selected model: Crunch B2.5 T7"));
+    expect(!overview.contains("newsletter"));
+    expect(described.description.contains("newsletter"));
+    expectEquals(juce::JSON::parse(described.toJson())["description"].toString(), described.description);
+
+    beginTest("missing settings are never inferred from model name or training epochs");
+    const auto missing = Tone::parse(juce::JSON::parse(
+        R"({"id":998,"gear":"pedal","description":"Epochs: 1000\nBuy the full pack!"})"));
+    expect(toneOverview(missing, "Gain 7").contains("Settings: Not supplied."));
+    expect(!toneOverview(missing).contains("1000"));
+
+    beginTest("factory summaries do not replace the original description");
+    const auto factory = Tone::parse(juce::JSON::parse(
+        R"({"id":45026,"description":"Original Mesa creator text"})"));
+    expectEquals(factory.description, juce::String("Original Mesa creator text"));
+    expect(toneOverview(factory).contains("preamp only"));
+
+    beginTest("Info exposes focusable overview and reveals original copy on demand");
+    BlockInfoPanel panel;
+    BlockInfoPanel::State info;
+    info.authenticated = true;
+    info.tone = described;
+    info.pageUrl = "https://www.tone3000.com/tones/999";
+    panel.setState(info);
+    panel.setSize(500, panel.heightFor(500));
+    juce::Button* moreInfo = nullptr;
+    int visibleText = 0;
+    for (auto* child : panel.getChildren()) {
+      if (auto* text = dynamic_cast<Paragraph*>(child); text && text->isVisible()) {
+        ++visibleText;
+        expect(text->getWantsKeyboardFocus());
+        expect(text->createAccessibilityHandler()->getTitle().contains("Includes:"));
+      }
+      if (auto* button = dynamic_cast<juce::Button*>(child);
+          button && button->getButtonText() == "More info") moreInfo = button;
+    }
+    expectEquals(visibleText, 1);
+    expect(moreInfo != nullptr);
+    if (moreInfo) {
+      moreInfo->onClick();
+      panel.setSize(500, panel.heightFor(500));
+      expect(moreInfo->getToggleState());
+      int readableOriginal = 0;
+      for (auto* child : panel.getChildren())
+        if (auto* text = dynamic_cast<Paragraph*>(child); text && text->isVisible() &&
+            text->createAccessibilityHandler()->getTitle().contains("newsletter")) ++readableOriginal;
+      expectEquals(readableOriginal, 1);
+      moreInfo->onClick();
+      panel.setSize(500, panel.heightFor(500));
+      expect(!moreInfo->getToggleState());
+    }
+
     beginTest("withModels patches the parsed list and the raw JSON alike");
     const auto tone = Tone::parse(juce::JSON::parse(
         R"({"id":1,"title":"T","gear":"amp","models_count":2,"a2_models_count":2,"models":[]})"));
@@ -1538,6 +1599,179 @@ struct BrowserAccessibilityTests : juce::UnitTest {
     expect(chip->hasKeyboardFocus(false));
   }
 };
+
+struct ToneInfoKeyboardTests : juce::UnitTest {
+  ToneInfoKeyboardTests() : juce::UnitTest("Tone Info keyboard", "ui") {}
+  void runTest() override {
+    beginTest("Favorites toggles with Enter and keeps focus");
+    {
+      LiveScenario live(*this, "main-detail");
+      if (live.ok) {
+        auto* favorite = drive::buttonNamed(live.root(), "Bookmark");
+        expect(favorite != nullptr);
+        if (favorite) {
+          const bool saved = favorite->getToggleState();
+          LiveScenario::focus(*favorite);
+          expect(live.key(juce::KeyPress::returnKey));
+          expect(LiveScenario::until([&] { return favorite->getToggleState() != saved; }));
+          expect(favorite->hasKeyboardFocus(false));
+          expectEquals(favorite->getTitle(), juce::String(saved ? "Add to favorites" : "Remove from favorites"));
+          expect(favorite->getAccessibilityHandler()->getCurrentState().isChecked() != saved);
+          LiveScenario::pump(100);
+          live.key(juce::KeyPress::returnKey);
+          expect(LiveScenario::until([&] { return favorite->getToggleState() == saved; }));
+        }
+      }
+    }
+    beginTest("Enter opens EQ and focuses a fader that responds to arrows");
+    {
+      LiveScenario live(*this, "main-detail");
+      if (live.ok) {
+        auto* eq = drive::find(live.root(), [](juce::Component& c) {
+          return dynamic_cast<juce::Button*>(&c) != nullptr && c.isShowing() && c.getHelpText().startsWith("EQ:");
+        });
+        expect(eq != nullptr);
+        if (eq) {
+          LiveScenario::focus(*eq);
+          expect(live.key(juce::KeyPress::returnKey));
+          expect(LiveScenario::until([] {
+            auto* focused = LiveScenario::focused();
+            return focused && focused->getHelpText().startsWith("EQ Power:");
+          }), "Bypassed EQ focuses its power button");
+          live.key(juce::KeyPress::returnKey);
+          LiveScenario::pump(100);
+          LiveScenario::focus(*eq);
+          live.key(juce::KeyPress::returnKey); // close
+          LiveScenario::pump(50);
+          live.key(juce::KeyPress::returnKey); // reopen enabled EQ
+          expect(LiveScenario::until([] { return dynamic_cast<juce::Slider*>(LiveScenario::focused()) != nullptr; }));
+          if (auto* fader = dynamic_cast<juce::Slider*>(LiveScenario::focused())) {
+            const double before = fader->getValue();
+            expect(live.key(juce::KeyPress::upKey));
+            expectWithinAbsoluteError(fader->getValue(), before + 0.5, 0.001);
+            auto* editor = fader->findParentComponentOfClass<BlockEqView>();
+            expect(editor != nullptr);
+            if (editor) expectWithinAbsoluteError(editor->bands()[1].gainDb, before + 0.5, 0.001);
+            expect(live.key(juce::KeyPress::downKey));
+            expectWithinAbsoluteError(fader->getValue(), before, 0.001);
+          }
+        }
+      }
+    }
+    for (const auto* scenario : {"main-detail", "main-detail-info-signed-out"}) {
+      beginTest(juce::String("Enter opens Info and focuses its content: ") + scenario);
+      LiveScenario live(*this, scenario);
+      if (!live.ok) continue;
+      auto* info = drive::find(live.root(), [](juce::Component& c) {
+        return dynamic_cast<juce::Button*>(&c) != nullptr && c.isShowing() && c.getHelpText().startsWith("Info:");
+      });
+      expect(info != nullptr);
+      if (!info) continue;
+      LiveScenario::focus(*info);
+      expect(live.key(juce::KeyPress::returnKey));
+      expect(LiveScenario::until([&] {
+        auto* focused = LiveScenario::focused();
+        for (auto* c = focused; c != nullptr; c = c->getParentComponent())
+          if (dynamic_cast<BlockInfoPanel*>(c) != nullptr) return focused->isShowing();
+        return false;
+      }), "Info should focus its overview or sign-in prompt after opening");
+    }
+  }
+};
+static ToneInfoKeyboardTests toneInfoKeyboardTests;
+
+struct BrowseInfoTests : juce::UnitTest {
+  BrowseInfoTests() : juce::UnitTest("Browse tone information", "ui") {}
+  void runTest() override {
+    beginTest("browsing results initialize and accept keyboard focus");
+    LiveScenario live(*this, "browser-search");
+    if (!live.ok) return;
+    auto* card = dynamic_cast<ToneCard*>(drive::find(live.root(), [](juce::Component& component) {
+      return dynamic_cast<ToneCard*>(&component) != nullptr && component.isShowing();
+    }));
+    expect(card != nullptr);
+    if (!card) return;
+    if (card->tone().description.trim().isNotEmpty())
+      expect(card->getHelpText().startsWith(card->tone().description.trim()), "Results retain the original creator description");
+    int picks = 0;
+    juce::String openedUrl;
+    card->onClick = [&] { ++picks; };
+    card->onOpenUrl = [&](const juce::String& url) { openedUrl = url; };
+    LiveScenario::focus(*card);
+    beginTest("Applications key opens inspection actions without selecting a tone");
+    expect(live.key(kWindowsApplicationsKey));
+    auto* more = drive::buttonNamed(live.root(), "More info");
+    auto* web = drive::buttonNamed(live.root(), "Open on web");
+    expect(more != nullptr && web != nullptr);
+    expectEquals(picks, 0);
+    if (!more || !web) return;
+    const auto qaDir = juce::SystemStats::getEnvironmentVariable("T3K_UI_QA_DIRECTORY", "");
+    const auto capture = [&](const juce::String& captureName) {
+      if (qaDir.isEmpty()) return;
+      const juce::File directory(qaDir);
+      directory.createDirectory();
+      auto stream = directory.getChildFile(captureName + ".png").createOutputStream();
+      if (stream) juce::PNGImageFormat().writeImageToStream(
+          live.root().createComponentSnapshot(live.root().getLocalBounds(), true, 2.0f), *stream);
+    };
+    capture("browser-context-menu");
+    more->onClick();
+    LiveScenario::pump(50);
+    beginTest("More info displays the overview without loading and Escape returns focus");
+    auto* panel = dynamic_cast<BlockInfoPanel*>(drive::find(live.root(), [](juce::Component& component) {
+      return dynamic_cast<BlockInfoPanel*>(&component) != nullptr && component.isShowing();
+    }));
+    expect(panel != nullptr);
+    expectEquals(picks, 0);
+    if (!panel) return;
+    auto* popup = panel->findParentComponentOfClass<Popover>();
+    expect(popup != nullptr);
+    if (!popup) return;
+    capture("browser-info-overview");
+    auto* expand = dynamic_cast<juce::Button*>(drive::find(*popup, [](juce::Component& component) {
+      auto* button = dynamic_cast<juce::Button*>(&component);
+      return button && button->getButtonText() == "More info";
+    }));
+    expect(expand != nullptr);
+    if (expand) {
+      expand->onClick();
+      LiveScenario::pump(50);
+      auto* original = drive::find(*popup, [](juce::Component& component) {
+        auto* paragraph = dynamic_cast<Paragraph*>(&component);
+        return paragraph && paragraph->plainText().contains("2002 Vox");
+      });
+      expect(original != nullptr);
+      if (original) LiveScenario::focus(*original);
+      capture("browser-info-expanded");
+    }
+    expect(popup->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
+    expect(LiveScenario::until([&] { return card->hasKeyboardFocus(false); }));
+    expectEquals(picks, 0);
+    beginTest("Shift F10 is routed through the window to the browsing card");
+    expect(live.key(juce::KeyPress::F10Key, juce::ModifierKeys::shiftModifier));
+    auto* keyboardMenuRow = drive::buttonNamed(live.root(), "Open on web");
+    expect(keyboardMenuRow != nullptr);
+    if (keyboardMenuRow) {
+      auto* keyboardMenu = keyboardMenuRow->findParentComponentOfClass<Popover>();
+      expect(keyboardMenu != nullptr);
+      if (keyboardMenu) keyboardMenu->dismiss();
+    }
+    expect(LiveScenario::until([&] { return card->hasKeyboardFocus(false); }));
+    beginTest("unloadable cards retain screen-reader inspection without activation");
+    card->setDisabled(true);
+    auto handler = card->createAccessibilityHandler();
+    handler->getActions().invoke(juce::AccessibilityActionType::press);
+    LiveScenario::pump(30);
+    expectEquals(picks, 0);
+    expect(handler->getActions().invoke(juce::AccessibilityActionType::showMenu));
+    expect(drive::buttonNamed(live.root(), "Open on web") != nullptr);
+    if (auto* openWeb = drive::buttonNamed(live.root(), "Open on web")) openWeb->onClick();
+    expectEquals(openedUrl, card->tone().url.isNotEmpty() ? card->tone().url :
+        "https://www.tone3000.com/tones/" + juce::String(card->tone().id));
+    expectEquals(picks, 0);
+  }
+};
+BrowseInfoTests browseInfoTests;
 
 struct PresetAccessibilityTests : juce::UnitTest {
   PresetAccessibilityTests() : juce::UnitTest("Preset accessibility", "ui") {}

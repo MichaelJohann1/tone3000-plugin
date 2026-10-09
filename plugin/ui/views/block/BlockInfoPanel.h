@@ -1,6 +1,6 @@
 // Extra tone metadata under the detail card's title column (port of
 // BlockInfoPanel.tsx): hairline, then either a sign-in / retry prompt or the
-// description (3-line clamp with MORE/LESS), makes & models, and tag chips;
+// overview, original creator description behind MORE/LESS, makes & models, and tag chips;
 // another hairline and the "View on TONE3000" link close it. Empty sections
 // are omitted. Height depends on width and content, so the owner lays it
 // out via heightFor(width) before setBounds.
@@ -16,6 +16,7 @@
 #include "core/TextFlow.h"
 #include "model/Tone.h"
 #include "widgets/PillButton.h"
+#include "widgets/form/FormText.h"
 
 namespace t3k::ui {
 
@@ -29,6 +30,7 @@ public:
     juce::String error;         // non-empty: the retry prompt
     std::optional<Tone> tone;   // the fetched catalog tone
     juce::String pageUrl;       // public tone page
+    juce::String modelName;     // selected model, not the entire pack
   };
   void setState(State state);
 
@@ -40,11 +42,13 @@ public:
 
   // Content height at `width` (rebuilds the flow for that width).
   int heightFor(int width);
+  void focusContent();
 
   void paint(juce::Graphics& g) override;
   void resized() override;
 
 private:
+  Paragraph overview_, creatorText_;
   class MoreButton;
   static constexpr int kGap = 24;
   static constexpr int kSectionGap = 8;

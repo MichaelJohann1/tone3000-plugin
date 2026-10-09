@@ -279,7 +279,7 @@ void ToneBrowser::rebuildCards() {
         return;
       }
       const auto it = std::find_if(cards_.begin(), cards_.end(), [id](const auto& c) { return c->tone().id == id; });
-      if (it != cards_.end()) pick((*it)->tone());
+      if (it != cards_.end() && (*it)->canSelect()) pick((*it)->tone());
     };
     content_->addAndMakeVisible(*card);
     cards_.push_back(std::move(card));

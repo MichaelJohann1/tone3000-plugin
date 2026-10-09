@@ -8,6 +8,7 @@
 #include "core/Paint.h"
 #include "core/Theme.h"
 #include "widgets/Clickable.h"
+#include "model/ToneOverview.h"
 
 namespace t3k::ui {
 
@@ -23,6 +24,17 @@ std::vector<juce::String> clean(const std::vector<juce::String>& names) {
 }
 
 int ceilInt(float v) { return static_cast<int>(std::ceil(v)); }
+
+RichText paragraphs(const juce::String& text) {
+  RichText runs;
+  juce::StringArray lines;
+  lines.addLines(text);
+  for (const auto& line : lines) {
+    if (!runs.empty()) runs.push_back(paragraphBreak());
+    runs.push_back(TextRun::plain(line));
+  }
+  return runs;
+}
 }  // namespace
 
 // MORE / LESS: mono 14px uppercase + a 16px chevron, gap 8.
@@ -34,7 +46,7 @@ public:
   }
   void setExpanded(bool expanded) {
     expanded_ = expanded;
-    setButtonText(expanded ? "Less" : "More");
+    setButtonText(expanded ? "Less info" : "More info");
     setSize(juce::roundToInt(Fonts::width(font(), label())) + kGap + kChevron, juce::roundToInt(kLineHeight));
     repaint();
   }
@@ -50,7 +62,7 @@ public:
 
 private:
   static constexpr int kGap = 8, kChevron = 16;
-  juce::String label() const { return expanded_ ? "LESS" : "MORE"; }
+  juce::String label() const { return expanded_ ? "LESS INFO" : "MORE INFO"; }
   static juce::Font font() { return Fonts::mono(kBodyPx); }
   bool expanded_ = false;
 };
@@ -71,10 +83,18 @@ BlockInfoPanel::BlockInfoPanel()
   more_->onClick = [this] {
     descExpanded_ = !descExpanded_;
     more_->setExpanded(descExpanded_);
+    more_->setToggleState(descExpanded_, juce::dontSendNotification);
     builtWidth_ = -1;
     if (onHeightChanged) onHeightChanged();
   };
   addChildComponent(*more_);
+  more_->setHelpText("More info: show or hide the full original creator description.");
+  more_->setClickingTogglesState(true);
+  for (auto* text : {&overview_, &creatorText_}) {
+    text->setAutoHeight(false);
+    text->setWantsKeyboardFocus(true);
+    addChildComponent(*text);
+  }
 
   view_->setMetrics({16, 8, 14, 8});
   view_->setCornerRadius(8.0f);
@@ -88,14 +108,25 @@ BlockInfoPanel::BlockInfoPanel()
 
 BlockInfoPanel::~BlockInfoPanel() = default;
 
+void BlockInfoPanel::focusContent() {
+  for (auto* target : std::initializer_list<juce::Component*>{&overview_, prompt_.get(), view_.get()}) {
+    if (target->isShowing() && target->isEnabled()) {
+      target->grabKeyboardFocus();
+      return;
+    }
+  }
+}
+
 void BlockInfoPanel::setState(State state) {
   // A new description collapses back to the clamp (DescriptionBlock's
   // effect on `text`).
   const auto oldDesc = state_.tone ? state_.tone->description : juce::String();
   const auto newDesc = state.tone ? state.tone->description : juce::String();
-  if (oldDesc != newDesc) descExpanded_ = false;
+  if (oldDesc != newDesc || state_.modelName != state.modelName ||
+      (state_.tone ? state_.tone->id : 0) != (state.tone ? state.tone->id : 0)) descExpanded_ = false;
   state_ = std::move(state);
   more_->setExpanded(descExpanded_);
+  more_->setToggleState(descExpanded_, juce::dontSendNotification);
   builtWidth_ = -1;
   if (getWidth() > 0) rebuild(getWidth());
   repaint();
@@ -143,6 +174,8 @@ void BlockInfoPanel::rebuild(int width) {
   prompt_->setVisible(false);
   more_->setVisible(false);
   view_->setVisible(false);
+  overview_.setVisible(false);
+  creatorText_.setVisible(false);
   if (width <= 0) return;
 
   const float w = static_cast<float>(width);
@@ -155,7 +188,7 @@ void BlockInfoPanel::rebuild(int width) {
   const auto description = state_.tone ? state_.tone->description.trim() : juce::String();
   const auto makeNames = makes();
   const auto tagNames = tags();
-  const bool hasSections = description.isNotEmpty() || !makeNames.empty() || !tagNames.empty();
+  const bool hasSections = state_.tone.has_value();
 
   if (signedOut || errored) {
     // Centred copy, 16px gap, filled pill; 8px pads top and bottom.
@@ -171,19 +204,21 @@ void BlockInfoPanel::rebuild(int width) {
                                 juce::roundToInt(itemTop + kPromptPadY + textH + kPromptGap));
     prompt_->setVisible(true);
   } else if (hasSections) {
+    addTitle("Overview");
+    overview_.setText(paragraphs(toneOverview(*state_.tone, state_.modelName)));
+    auto& overviewItem = add(Item::Kind::control, overview_.heightFor(w));
+    overview_.setBounds(overviewItem.bounds);
+    overview_.setVisible(true);
     if (description.isNotEmpty()) {
-      addTitle("Description");
-      auto flow = std::make_unique<TextFlow>(body, kLineHeight, description, w, /*preLine=*/true);
-      const bool overflows = flow->overflows(kDescClampLines);
-      const int lines = descExpanded_ ? flow->lineCount() : juce::jmin(kDescClampLines, flow->lineCount());
-      auto& item = add(Item::Kind::body, kLineHeight * static_cast<float>(lines));
-      item.maxLines = descExpanded_ ? 0 : kDescClampLines;
-      item.flows.push_back(std::move(flow));
-      if (overflows) {
-        cursorY_ += kSectionGap - kGap;
-        auto& more = add(Item::Kind::control, more_->getHeight());
-        more_->setTopLeftPosition(0, more.bounds.getY());
-        more_->setVisible(true);
+      auto& more = add(Item::Kind::control, more_->getHeight());
+      more_->setTopLeftPosition(0, more.bounds.getY());
+      more_->setVisible(true);
+      if (descExpanded_) {
+        addTitle("Creator description");
+        creatorText_.setText(paragraphs(description));
+        auto& item = add(Item::Kind::control, creatorText_.heightFor(w));
+        creatorText_.setBounds(item.bounds);
+        creatorText_.setVisible(true);
       }
     }
     if (!makeNames.empty()) {

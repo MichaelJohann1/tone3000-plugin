@@ -452,15 +452,66 @@ private:
 
 // Sliders view
 class BlockEqView::Sliders : public juce::Component, private juce::Timer {
+  class KeyboardFader : public juce::Slider {
+  public:
+    void paint(juce::Graphics& g) override {
+      if (hasKeyboardFocus(false)) {
+        g.setColour(theme::kWhite);
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1), 4, 1);
+      }
+    }
+    bool keyPressed(const juce::KeyPress& key) override {
+      const auto code = key.getKeyCode();
+      if (code != juce::KeyPress::upKey && code != juce::KeyPress::downKey &&
+          code != juce::KeyPress::homeKey && code != juce::KeyPress::endKey) return false;
+      const double step = key.getModifiers().isShiftDown() ? 0.1 : 0.5;
+      setValue(code == juce::KeyPress::homeKey ? getMinimum() : code == juce::KeyPress::endKey ? getMaximum() :
+               getValue() + (code == juce::KeyPress::upKey ? step : -step), juce::sendNotificationSync);
+      return true;
+    }
+  };
+  std::vector<std::unique_ptr<KeyboardFader>> faders_;
 public:
   explicit Sliders(BlockEqView& owner) : owner_(owner) { setSize(kGraphW, eq::kBodyH); }
 
-  void bandsChanged() { repaint(); }
+  void bandsChanged() {
+    const auto& bands = owner_.bands();
+    while (faders_.size() < bands.size()) {
+      const int index = static_cast<int>(faders_.size());
+      auto fader = std::make_unique<KeyboardFader>();
+      fader->setSliderStyle(juce::Slider::LinearVertical);
+      fader->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+      fader->setRange(-kEqMaxAbsGainDb, kEqMaxAbsGainDb, 0.1);
+      fader->setWantsKeyboardFocus(true);
+      fader->setInterceptsMouseClicks(false, false);
+      fader->onValueChange = [this, index] {
+        auto band = owner_.bands()[static_cast<size_t>(index)];
+        band.gainDb = faders_[static_cast<size_t>(index)]->getValue();
+        owner_.updateBand(index, band);
+      };
+      addAndMakeVisible(*fader);
+      faders_.push_back(std::move(fader));
+    }
+    while (faders_.size() > bands.size()) faders_.pop_back();
+    for (size_t i = 0; i < bands.size(); ++i) {
+      faders_[i]->setTitle("EQ band " + juce::String(static_cast<int>(i) + 1) + ", " + eq::formatFreq(bands[i].freqHz) + " gain in dB");
+      faders_[i]->setValue(bands[i].gainDb, juce::dontSendNotification);
+      faders_[i]->setEnabled(owner_.eqEnabled() && eq::hasGain(bands[i].type));
+    }
+    resized();
+    repaint();
+  }
+
+  void resized() override {
+    for (size_t i = 0; i < faders_.size(); ++i)
+      faders_[i]->setBounds(juce::roundToInt(columnCentre(static_cast<int>(i))) - 20, 16, 40, getHeight() - 32);
+  }
 
   void enabledChanged(bool animate) {
     const bool on = owner_.eqEnabled();
     fade_.animateTo(on ? 1.0f : theme::kDisabledOpacity, kDimMs, animate);
     setInterceptsMouseClicks(on, on);
+    bandsChanged();
   }
 
   void paint(juce::Graphics& g) override {
@@ -690,6 +741,11 @@ BlockEqView::BlockEqView(Services& services, std::string blockId)
 }
 
 BlockEqView::~BlockEqView() = default;
+
+void BlockEqView::focusControls() {
+  juce::KeyboardFocusTraverser traverser;
+  if (auto* first = traverser.getDefaultComponent(this)) first->grabKeyboardFocus();
+}
 
 void BlockEqView::setBands(const std::vector<EqBand>& bands) {
   if (dragging_) return;
