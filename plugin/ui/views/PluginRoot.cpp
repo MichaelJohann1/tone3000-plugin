@@ -252,8 +252,21 @@ void PluginRoot::updateChromeHeight() {
   const int hintExtra = hintsVisible_ ? design::kHintHeight : 0;
   const int bannerExtra = bannerPhase_ != BannerPhase::hidden ? AppBanner::kHeight : 0;
   hintBar_.setVisible(hintsVisible_);
-  setSize(design::kWidth, design::kHeight + bannerExtra + hintExtra);
+  applyDesignSize();
   services_.shell.setExtraContentHeight(bannerExtra + hintExtra, hintExtra);
+}
+
+void PluginRoot::setStretch(int px) {
+  px = juce::jlimit(0, design::kMaxStretch, px);
+  if (px == stretch_) return;
+  stretch_ = px;
+  applyDesignSize();
+}
+
+void PluginRoot::applyDesignSize() {
+  const int hintExtra = hintsVisible_ ? design::kHintHeight : 0;
+  const int bannerExtra = bannerPhase_ != BannerPhase::hidden ? AppBanner::kHeight : 0;
+  setSize(design::kWidth, design::kHeight + stretch_ + bannerExtra + hintExtra);
 }
 
 // Banner choreography
@@ -554,13 +567,14 @@ void PluginRoot::resized() {
   for (auto* modal : {static_cast<ModalLayer*>(updateNotice_.get()), static_cast<ModalLayer*>(connectionModal_.get())})
     if (modal != nullptr) modal->setBounds(getLocalBounds());
 
-  // The banner strip, then the content column at its full height; while
-  // the window has the strip's space but the banner isn't shown yet, the
-  // gap at the bottom is black on black.
+  // The banner strip, then the content column at its full height (the core
+  // plus the stretch); while the window has the strip's space but the
+  // banner isn't shown yet, the gap at the bottom is black on black.
   const int slotH = bannerPhase_ == BannerPhase::shown ? AppBanner::kHeight : 0;
   banner_.setBounds(0, 0, design::kWidth, AppBanner::kHeight);
   const int hintH = hintsVisible_ ? design::kHintHeight : 0;
-  auto column = juce::Rectangle<int>(0, slotH, design::kWidth, design::kHeight + hintH);
+  const int coreH = design::kHeight + stretch_;
+  auto column = juce::Rectangle<int>(0, slotH, design::kWidth, coreH + hintH);
   if (hintsVisible_) hintBar_.setBounds(column.removeFromBottom(hintH));
   header_.setBounds(column.removeFromTop(PluginHeader::kHeight));
   if (browser_) browser_->setBounds(column);  // the rest, faceplate included
@@ -570,7 +584,7 @@ void PluginRoot::resized() {
   if (tuner_) tuner_->setBounds(column);
 
   // The toast floats above the faceplate, measured from the overlay's bottom.
-  const int belowColumn = getHeight() - (slotH + design::kHeight + hintH);
+  const int belowColumn = getHeight() - (slotH + coreH + hintH);
   toast_.setBottomOffset(belowColumn + design::kPlateHeight + hintH + kToastGap);
 }
 

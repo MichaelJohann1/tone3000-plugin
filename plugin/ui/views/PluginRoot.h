@@ -4,6 +4,15 @@
 // banners and modals. Laid out in design space
 // (1024 x 578 + chrome strips); the shell scales the whole thing.
 //
+// The 578 is the core's minimum. A window taller than its width calls for
+// hands the surplus to the root as a stretch (setStretch, from the shell's
+// WindowFit): the content column between header and faceplate grows by it,
+// and the screens in the column keep their titles under the header and
+// centre what is below them in the room (the chain lanes, a block's card)
+// or fill it (the tone browser, Settings, the tuner). Header, faceplate and
+// chrome strips keep their heights, so at stretch 0 nothing differs from
+// the fixed design.
+//
 // The chrome strips grow the window instead of squishing the 578px core, so
 // the banner's arrival is choreographed against the window resize
 // (useChromeChoreography) so the content column moves once, not twice:
@@ -59,8 +68,14 @@ public:
   explicit PluginRoot(Services& services);
   ~PluginRoot() override;
 
-  // Current design-space height: the core plus whatever chrome strips show.
+  // Current design-space height: the core, its stretch and whatever chrome
+  // strips show.
   int designHeight() const { return getHeight(); }
+
+  // Design px the content column grows by beyond the core height (see the
+  // header). The shell sets it from the window it has; 0 is the design.
+  void setStretch(int px);
+  int stretch() const { return stretch_; }
 
   Services& services() { return services_; }
   juce::Component& overlayLayer() override { return overlay_; }
@@ -115,6 +130,8 @@ private:
   juce::Component::SafePointer<juce::Component> modalReturnFocus_;
   juce::Component::SafePointer<ModalLayer> focusedModal_;
   void updateChromeHeight();
+  // Our own size: the core, the stretch and the chrome strips showing.
+  void applyDesignSize();
   // Banner phase machine.
   bool viewportFits() const;
   void bannerShow();
@@ -154,6 +171,7 @@ private:
   HintTracker hintTracker_;
   PointerTracker pointerTracker_;
   bool hintsVisible_ = true;
+  int stretch_ = 0;
 
   BannerPhase bannerPhase_ = BannerPhase::hidden;
   DelayedCall bannerWait_;

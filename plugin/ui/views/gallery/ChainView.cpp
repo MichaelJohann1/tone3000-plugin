@@ -199,7 +199,9 @@ const ChainItem* ChainView::itemIn(const Lanes& lanes, const std::string& id) co
   return nullptr;
 }
 
-// Layout
+// Layout. The scroller fills the column, so a stretched column (see
+// PluginRoot::setStretch) centres the lanes in the extra room (layoutColumn)
+// while the title keeps its place under the header.
 void ChainView::resized() {
   auto area = getLocalBounds().reduced(kPadX, kPadY);
   if (stereo()) rail_.setBounds(area.removeFromLeft(StereoPanRail::kWidth).withSizeKeepingCentre(

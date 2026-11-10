@@ -87,13 +87,16 @@ void BlockDetail::layout() {
   if (!card_) return;
   scroller_->setBounds(getLocalBounds());
   const int x = (getWidth() - BlockCard::kWidth) / 2;
-  // Info view: the pads live in the scroll content; otherwise the column is
-  // pinned under the shared pad and never scrolls.
-  const int top = kPadY;
-  back_->setTopLeftPosition(x, top);
-  card_->setTopLeftPosition(x, top + back_->getHeight() + kBackGap);
-  const int contentH = card_->getBottom() + kPadY;
-  column_.setSize(getWidth(), infoOpen_ ? std::max(contentH, getHeight()) : getHeight());
+  // The back link keeps its place under the header; the card fills the
+  // design column exactly, so a stretched column (PluginRoot::setStretch)
+  // centres it in the room below the link. Info view: the pads live in the
+  // scroll content; otherwise the column is pinned under the shared pad and
+  // never scrolls.
+  back_->setTopLeftPosition(x, kPadY);
+  const int cardTop = back_->getBottom() + kBackGap;
+  const int room = getHeight() - cardTop - kPadY - card_->getHeight();
+  card_->setTopLeftPosition(x, cardTop + std::max(0, room) / 2);
+  column_.setSize(getWidth(), infoOpen_ ? std::max(card_->getBottom() + kPadY, getHeight()) : getHeight());
   if (!infoOpen_) scroller_->setViewPosition(0, 0);
 }
 

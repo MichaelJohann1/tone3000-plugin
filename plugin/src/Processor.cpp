@@ -2,6 +2,7 @@
 #if !HEADLESS
 #include "NativeEditor.h"
 #endif
+#include "AppData.h"
 #include "StandaloneStateAutosave.h"
 #include <cmath>
 #include <mutex>
@@ -45,10 +46,16 @@ TONE3000Processor::TONE3000Processor()
   // Heal the per-user app-data folder before anything writes to it: a
   // root-owned folder fails every settings save and drop-stash write while
   // reads keep working (github issue #76; see ensureWritableDir, which logs
-  // whatever it does). Once per process, like the stash GC below.
+  // whatever it does). Once per process, like the stash GC below. The
+  // folder itself was resolved (and, on iOS, filled from an earlier build's
+  // container) by the member initialisers above, before the logger existed;
+  // say here what that did.
   static std::once_flag appDataHealFlag;
-  std::call_once(appDataHealFlag,
-                 [] { ensureWritableDir(getSettingsFile().getParentDirectory()); });
+  std::call_once(appDataHealFlag, [] {
+    if (const auto adopted = t3k::appdata::adoptionReport(); adopted.isNotEmpty())
+      juce::Logger::writeToLog("[AppData] " + adopted);
+    ensureWritableDir(getSettingsFile().getParentDirectory());
+  });
 
   // One-line snapshot of everything read from the shared machine-wide
   // settings file at construction, plus the file's own path and whether its
@@ -588,9 +595,10 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
     } else if (block->type == ChainBlockType::IR && block->convolverMono != nullptr) {
       // Convolvers always run at the base rate behind the block's island
       // (see ChainBlock::irBaseRateIsland), so their spec only tracks the
-      // base block size, never the oversampling factor.
+      // base block size (capped, see irConvolverBlockSizeFor), never the
+      // oversampling factor.
       juce::dsp::ProcessSpec spec{kChainBaseSampleRate,
-                                  static_cast<juce::uint32>(chainBaseBlockSize()), 2};
+                                  static_cast<juce::uint32>(irConvolverBlockSize()), 2};
       block->convolverMono->prepare(spec);
       if (block->convolverStereo != nullptr)
         block->convolverStereo->prepare(spec);
@@ -1395,7 +1403,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
             [&convolver, numChannels](float* const* baseChannels, int baseFrames) {
               juce::dsp::AudioBlock<float> irBlock(baseChannels, static_cast<size_t>(numChannels),
                                                    static_cast<size_t>(baseFrames));
-              convolver.process(juce::dsp::ProcessContextReplacing<float>(irBlock));
+              processConvolverInChunks(convolver, irBlock);
             });
 
         // Unit-energy normalization, always on: an IR file's absolute level

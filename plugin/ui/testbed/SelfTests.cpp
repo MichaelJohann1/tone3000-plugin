@@ -24,6 +24,7 @@
 #include "core/Pitch.h"
 #include "core/RichText.h"
 #include "core/TextFlow.h"
+#include "core/WindowFit.h"
 #include "model/ChainState.h"
 #include "model/Tone.h"
 #include "model/ToneOverview.h"
@@ -33,13 +34,21 @@
 #include "services/OAuth.h"
 #include "services/Pointer.h"
 #include "services/Tone3000Client.h"
+#include "services/Tone3000Session.h"
 #include "services/UiPrefs.h"
 #include "services/UpdateCheck.h"
+#include "views/Faceplate.h"
+#include "views/HintBar.h"
+#include "views/PluginHeader.h"
+#include "views/block/BlockCard.h"
+#include "views/block/BlockDetail.h"
 #include "views/browser/FilterChip.h"
 #include "views/browser/Paginator.h"
 #include "views/browser/ToneCard.h"
 #include "views/block/BlockInfoPanel.h"
+#include "views/gallery/ChainView.h"
 #include "views/gallery/GalleryGeometry.h"
+#include "views/gallery/GalleryLane.h"
 #include "views/gallery/GalleryTile.h"
 #include "views/gallery/AddTile.h"
 #include "views/gallery/ToneTile.h"
@@ -49,6 +58,7 @@
 #include "widgets/RichTextView.h"
 #include "widgets/ChromeIconButton.h"
 #include "widgets/Avatar.h"
+#include "widgets/BackLink.h"
 #include "widgets/ChromeTextButton.h"
 #include "widgets/Clickable.h"
 #include "widgets/DbMeter.h"
@@ -61,6 +71,7 @@
 #include "widgets/form/FormControls.h"
 #include "widgets/form/SelectField.h"
 #include "widgets/Popover.h"
+#include "widgets/QrCode.h"
 #include "widgets/SegmentedText.h"
 #include "widgets/SecondaryPress.h"
 
@@ -615,6 +626,154 @@ struct Tone3000ClientTests : juce::UnitTest {
     expect(granted && granted->access == "A6" && granted->refresh == "R6");
   }
 };
+
+// Sign-in in a process with no browser (Config::signInViaApp, the iOS
+// AUv3): the device flow is the sign-in, and a sign-in made in the TONE3000
+// app is adopted from the shared preferences. Two UiPrefs on one file stand
+// in for the app's and the plugin's processes.
+struct Tone3000SessionTests : juce::UnitTest {
+  Tone3000SessionTests() : juce::UnitTest("Tone3000Session", "ui") {}
+
+  struct Process {
+    Process(const juce::File& file, juce::InterProcessLock& lock)
+        : props(file,
+                [&] {
+                  juce::PropertiesFile::Options o;
+                  o.millisecondsBeforeSaving = -1;
+                  o.processLock = &lock;
+                  return o;
+                }()),
+          prefs(&props, &lock) {}
+    juce::PropertiesFile props;
+    UiPrefs prefs;
+  };
+
+  struct Ears : ToneSession::Listener {
+    explicit Ears(const ToneSession& s) : session(s) {}
+    const ToneSession& session;
+    int sessionChanges = 0;
+    bool sawScreen = false;  // the flow was seen leaving (the sign-in screen came up)
+    void reset() { sessionChanges = 0, sawScreen = false; }
+    void sessionChanged() override { ++sessionChanges; }
+    void authFlowChanged() override {
+      sawScreen |= session.authFlow().phase == ToneSession::AuthFlow::Phase::leaving;
+    }
+  };
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  void runTest() override {
+    using Phase = ToneSession::AuthFlow::Phase;
+    using DeviceState = ToneSession::AuthFlow::Device::State;
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* scenario = fixtures.find("main-stereo");
+    if (scenario == nullptr) {
+      expect(false, "main-stereo scenario missing");
+      return;
+    }
+    MockBackend backend(scenario->data);
+    ScriptedHttp http;
+    // The device endpoints as the server answers them: a code at once, then
+    // "not yet" to every poll until `approved` is set.
+    bool approved = false;
+    http.answer = [&](const HttpRequest& r) {
+      const auto path = r.url.toString(false);
+      if (path.endsWith("/oauth/device_authorization"))
+        return jsonResponse(200, R"({"device_code":"D1","user_code":"BCDF-GHJK",
+          "verification_uri":"https://www.tone3000.com/activate",
+          "verification_uri_complete":"https://www.tone3000.com/activate?user_code=BCDF-GHJK",
+          "expires_in":600,"interval":1})");
+      if (path.endsWith("/oauth/token"))
+        return approved ? jsonResponse(200, R"({"access_token":"A2","refresh_token":"R2","expires_in":3600})")
+                        : jsonResponse(400, R"({"error":"authorization_pending"})");
+      return jsonResponse(200, R"({"id":7,"username":"ada"})");
+    };
+    const auto file = juce::File::createTempFile("t3k-session.xml");
+    juce::InterProcessLock lock("TONE3000.ui-preferences.session-test");
+    Process app(file, lock), plugin(file, lock);
+    Tone3000Session::Config config;
+    config.apiOrigin = "https://api.test";
+    config.publishableKey = "pk_test";
+    config.signInViaApp = true;
+    Tone3000Session session(backend, plugin.prefs, http, config);
+    Ears ears(session);
+    session.addListener(&ears);
+    int browserOpens = 0;
+    session.onAuthenticated = [&] { ++browserOpens; };
+    const Tokens tokens{"A1", "R1", juce::Time::currentTimeMillis() + 3'600'000};
+    const auto access = [&] {
+      const auto t = Tokens::fromVar(plugin.prefs.getJson(UiPrefs::kTokens));
+      return t ? t->access : juce::String();
+    };
+    const auto deviceRequests = [&] {
+      return static_cast<int>(std::count_if(http.sent.begin(), http.sent.end(), [](const ScriptedHttp::Sent& s) {
+        return s.url.endsWith("/oauth/device_authorization");
+      }));
+    };
+
+    beginTest("signed out, login goes straight to the device code, no browser");
+    session.login(ToneSession::LoginIntent::plain);
+    const auto& flow = session.authFlow();
+    expect(flow.phase == Phase::leaving && flow.deviceOnly);
+    expect(flow.device && flow.device->state == DeviceState::waiting && flow.device->userCode == "BCDF-GHJK");
+    expect(flow.authorizeUrl.isEmpty());  // nothing to copy: there is no browser path
+    expectEquals(deviceRequests(), 1);
+    expect(!session.authenticated());
+
+    beginTest("the back arrow abandons it: the code poll and the app watch both stop");
+    session.cancelFlow();
+    expect(flow.phase == Phase::idle && !flow.device);
+    const auto polls = static_cast<int>(http.sent.size());
+    app.prefs.setJson(UiPrefs::kTokens, tokens.toVar());  // the app signs in after the dismissal
+    pump(Tone3000Session::kAppSignInPollMs + 300);
+    expect(flow.phase == Phase::idle);
+    expectEquals(ears.sessionChanges, 0);
+    expectEquals(static_cast<int>(http.sent.size()), polls);  // no device poll either
+    app.prefs.remove(UiPrefs::kTokens);
+
+    beginTest("the app signing in while the page is up finishes the flow by itself");
+    ears.reset();
+    session.login(ToneSession::LoginIntent::browse);
+    expect(flow.phase == Phase::leaving && flow.device.has_value());
+    app.prefs.setJson(UiPrefs::kTokens, tokens.toVar());
+    expect(!session.authenticated());  // not until the poll re-reads the file
+    pump(Tone3000Session::kAppSignInPollMs + 300);
+    expect(session.authenticated() && access() == "A1");
+    expect(flow.phase == Phase::idle && !flow.device);
+    expect(ears.sessionChanges >= 1);
+    expectEquals(browserOpens, 1);  // a browse-intent login still lands in the browser
+    expect(session.user().has_value() && session.user()->username == "ada");
+    session.logout();
+    app.prefs.sync();  // the app re-reads the file on its own schedule
+    expect(!session.authenticated() && !app.prefs.getJson(UiPrefs::kTokens).isObject());  // one sign-out for both
+
+    beginTest("the code being approved finishes it, and the app watch stops");
+    ears.reset();
+    http.sent.clear();
+    session.login(ToneSession::LoginIntent::plain);
+    expect(flow.phase == Phase::leaving && flow.deviceOnly);
+    approved = true;
+    pump(1500);  // the server's interval is 1 s
+    expect(session.authenticated() && access() == "A2");
+    expect(flow.phase == Phase::idle);
+    expectEquals(browserOpens, 1);  // plain intent: no browser
+    app.prefs.sync();
+    expect(Tokens::fromVar(app.prefs.getJson(UiPrefs::kTokens)).has_value());  // the app has them too
+    approved = false;
+
+    beginTest("already signed in by the app, a gated action simply goes ahead");
+    ears.reset();
+    http.sent.clear();
+    session.login(ToneSession::LoginIntent::plain);
+    expect(flow.phase == Phase::idle);
+    expect(!ears.sawScreen);  // never showed the page
+    expectEquals(deviceRequests(), 0);
+
+    session.removeListener(&ears);
+    file.deleteFile();
+  }
+};
+
 
 struct DragScrollerTests : juce::UnitTest {
   DragScrollerTests() : juce::UnitTest("DragScroller", "ui") {}
@@ -3007,6 +3166,83 @@ struct BlockSizeToggleTests : juce::UnitTest {
   }
 };
 
+// Committing a typed CC number swaps the listening row for a mapping row of
+// the same height. The form host only re-flows on a height change, so the
+// card has to place its new rows itself or they sit at 0×0 and the card
+// paints as an empty box until Settings is reopened (issue #220).
+struct MidiMapCommitTests : juce::UnitTest {
+  MidiMapCommitTests() : juce::UnitTest("MIDI mapping commit", "ui") {}
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  static juce::Component* named(juce::Component& root, const juce::String& name) {
+    return drive::find(root, [&](juce::Component& c) { return c.getName() == name && c.isShowing(); });
+  }
+
+  void runTest() override {
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* scenario = fixtures.find("settings-midi-empty");
+    if (scenario == nullptr) {
+      expect(false, "settings-midi-empty scenario missing");
+      return;
+    }
+    MockBackend backend(scenario->data);
+    juce::DocumentWindow window("midi commit", juce::Colours::black, 0);
+    ScaledHost host(backend, *scenario, fixtures.root);
+    window.setContentNonOwned(&host, true);
+    window.setVisible(true);
+    pump(400);
+    auto& root = host.pluginRoot();
+    drive::openSettings(root);
+    drive::scrollSettingsTo(root, "MIDI Mapping");
+    pump(100);
+
+    beginTest("choosing a control arms a listening row with a CC field");
+    expect(named(root, "CC number") == nullptr);
+    root.services().midiMap.startLearn("outputLevel");
+    pump(50);
+    juce::Component::SafePointer<juce::Component> cc(named(root, "CC number"));
+    expect(cc != nullptr);
+    if (cc == nullptr) return;
+    expect(!cc->getParentComponent()->getBounds().isEmpty());
+
+    beginTest("Return commits once the key event has unwound, not under the field's own callback");
+    drive::submit(root, "CC #", "15");
+    const auto& state = root.services().midiMap.state();
+    expect(cc != nullptr, "the CC field was destroyed inside its Return handler");
+    expect(state && state->learnTargetId == "outputLevel");  // still armed until the deferred commit
+    pump(50);
+    expect(cc == nullptr);
+    expect(state && state->learnTargetId.isEmpty());
+    const auto* mapping = state ? state->mappingFor("outputLevel") : nullptr;
+    expect(mapping != nullptr && mapping->number == 15);
+
+    beginTest("the mapping row shows in place");
+    expect(named(root, "CC number") == nullptr);
+    juce::Component::SafePointer<juce::Component> remove(named(root, "Remove"));
+    expect(remove != nullptr, "no mapping row after commit");
+    if (remove == nullptr) return;
+    // The row was placed inside the card, not left at 0×0.
+    auto* row = remove->getParentComponent();
+    expect(row != nullptr && !row->getBounds().isEmpty(), "mapping row has no bounds");
+    expect(row != nullptr && row->getBounds().contains(remove->getBounds()));
+    expect(row != nullptr && row->getWidth() == row->getParentComponent()->getWidth() - 2);
+
+    beginTest("Remove outlives its own click, then the list empties");
+    auto* removeButton = dynamic_cast<juce::Button*>(remove.getComponent());
+    expect(removeButton != nullptr && removeButton->onClick != nullptr);
+    if (removeButton == nullptr || removeButton->onClick == nullptr) return;
+    removeButton->onClick();  // the handler itself; triggerClick() and drive::click() both pump
+    expect(remove != nullptr, "the Remove button was destroyed inside its click handler");
+    expect(state && !state->mappings.empty());  // the change waits for the click to unwind
+    pump(50);
+    expect(remove == nullptr);
+    expect(state && state->mappings.empty());
+    expect(named(root, "Remove") == nullptr);
+    window.setVisible(false);
+  }
+};
+
 // A readout wider than its knob ("-100 dB" under the 36px gate, whose dim
 // group is exactly the knob's width) shows whole: it floats in the overlay
 // layer, past the column and the parents that clip the knob.
@@ -3368,9 +3604,241 @@ struct FaceplateDualMonoTests : juce::UnitTest {
   }
 };
 
+// core/WindowFit: the width picks the scale, a taller box stretches the
+// column, a shorter one letterboxes; the constrainer's minimum height follows
+// the width. Then the screens' response to a stretched column, through the
+// same ScaledHost the captures use: header, faceplate and hint bar hold their
+// heights, the titles stay put and the lanes / block card centre in the room.
+struct WindowFitTests : juce::UnitTest {
+  WindowFitTests() : juce::UnitTest("Window fit", "ui") {}
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  template <typename T>
+  static T* findView(juce::Component& root) {
+    return dynamic_cast<T*>(drive::find(root, [](juce::Component& c) { return dynamic_cast<T*>(&c) != nullptr; }));
+  }
+
+  // The scenario with the column stretched by `stretch` design px.
+  static Scenario stretched(const Scenario& base, int stretch) {
+    Scenario copy{base.id, base.data.clone(), base.hasDrive};
+    copy.data.getDynamicObject()->setProperty("stretch", stretch);
+    return copy;
+  }
+
+  void runTest() override {
+    using design::fit;
+    constexpr int kMinH = design::kHeight + design::kHintHeight;  // 614: the design box with the hint bar
+
+    beginTest("the design box at any scale fits exactly");
+    expectWithinAbsoluteError(fit(1024, kMinH, kMinH).scale, 1.0, 1e-9);
+    expectEquals(fit(1024, kMinH, kMinH).stretch, 0);
+    expectWithinAbsoluteError(fit(2048, 2 * kMinH, kMinH).scale, 2.0, 1e-9);
+    expectEquals(fit(2048, 2 * kMinH, kMinH).stretch, 0);
+
+    beginTest("a taller box keeps the width's scale and stretches by the surplus");
+    const auto ipad = fit(1024, 768, kMinH);  // a 4:3 screen at 1x
+    expectWithinAbsoluteError(ipad.scale, 1.0, 1e-9);
+    expectEquals(ipad.stretch, 768 - kMinH);
+    const auto scaled = fit(1536, 1152, kMinH);  // the same shape at 1.5x
+    expectWithinAbsoluteError(scaled.scale, 1.5, 1e-9);
+    expectEquals(scaled.stretch, 768 - kMinH);
+    expectEquals(fit(1024, 614 + 7, kMinH).stretch, 7);
+
+    beginTest("the stretch is capped");
+    expectEquals(fit(1024, kMinH + design::kMaxStretch + 300, kMinH).stretch, design::kMaxStretch);
+
+    beginTest("a box too short for its width scales by height and letterboxes, with no stretch");
+    const auto squat = fit(1024, 500, kMinH);
+    expectWithinAbsoluteError(squat.scale, 500.0 / kMinH, 1e-9);
+    expectEquals(squat.stretch, 0);
+    expect(fit(0, 0, kMinH).scale > 0.0, "an unsized box still fits at a positive scale");
+
+    beginTest("the constrainer's height range follows the width");
+    design::FitConstrainer c;
+    c.setMinDesignHeight(kMinH);
+    expectEquals(c.minHeightFor(1024), kMinH);
+    expectEquals(c.minHeightFor(2048), 2 * kMinH);
+    expectEquals(c.maxHeightFor(1024), kMinH + design::kMaxStretch);
+    const juce::Rectangle<int> limits(0, 0, 10000, 10000);
+    auto check = [&](juce::Rectangle<int> b, bool top = false) {
+      const auto previous = b;
+      c.checkBounds(b, previous, limits, top, false, !top, true);
+      return b;
+    };
+    expectEquals(check({0, 0, 1024, 500}).getHeight(), kMinH);                     // under the minimum: raised
+    expectEquals(check({0, 0, 1536, 700}).getHeight(), c.minHeightFor(1536));      // wider: the minimum rises with it
+    expectEquals(check({0, 0, 1024, 700}).getHeight(), 700);                       // taller is allowed
+    expectEquals(check({0, 0, 1024, 5000}).getHeight(), c.maxHeightFor(1024));     // up to the cap
+    expectEquals(check({0, 0, 800, 400}).getWidth(), design::kWidth);              // the width floors at 1x
+    expectEquals(check({0, 0, 800, 400}).getHeight(), kMinH);
+    expectEquals(check({0, 0, 3000, 3000}).getWidth(), juce::roundToInt(design::kWidth * design::kMaxScale));
+    expectEquals(check({0, 100, 1024, 500}, /*top=*/true).getBottom(), 600);        // a top drag keeps the bottom
+    expectEquals(check({0, 100, 1024, 500}, /*top=*/true).getHeight(), kMinH);
+
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* mono = fixtures.find("main-mono");
+    const auto* detail = fixtures.find("main-detail");
+    if (mono == nullptr || detail == nullptr) {
+      expect(false, "main-mono / main-detail scenarios missing");
+      return;
+    }
+    constexpr int kStretch = 160;
+
+    beginTest("the root takes the stretch into its column; header, faceplate and hint bar hold");
+    {
+      MockBackend backend(mono->data);
+      ScaledHost host(backend, stretched(*mono, kStretch), fixtures.root);
+      pump(100);
+      auto& root = host.pluginRoot();
+      expectEquals(host.getHeight(), kMinH + kStretch);
+      expectEquals(root.stretch(), kStretch);
+      expectEquals(root.designHeight(), kMinH + kStretch);
+      expectWithinAbsoluteError(root.services().zoom.factor(), 1.0, 1e-9);
+      auto* header = findView<PluginHeader>(root);
+      auto* plate = findView<Faceplate>(root);
+      auto* hints = findView<HintBar>(root);
+      auto* chain = findView<ChainView>(root);
+      expect(header != nullptr && plate != nullptr && hints != nullptr && chain != nullptr);
+      if (header == nullptr || plate == nullptr || hints == nullptr || chain == nullptr) return;
+      expectEquals(header->getHeight(), design::kHeaderHeight);
+      expectEquals(root.getLocalArea(header, header->getLocalBounds()).getY(), 0);
+      expectEquals(plate->getHeight(), design::kPlateHeight);
+      const auto plateInRoot = root.getLocalArea(plate, plate->getLocalBounds());
+      expectEquals(plateInRoot.getBottom(), design::kHeight + kStretch);
+      const auto hintsInRoot = root.getLocalArea(hints, hints->getLocalBounds());
+      expectEquals(hintsInRoot.getY(), design::kHeight + kStretch);
+      expectEquals(hintsInRoot.getBottom(), root.getHeight());
+      expectEquals(chain->getHeight(), design::kColumnHeight + kStretch);
+
+      beginTest("the gallery keeps its title in place and centres the lanes in the room");
+      const auto scroller = chain->scroller().getBounds();
+      expectEquals(scroller.getY(), ChainView::kPadY);  // the title's row stays under the header
+      expectEquals(scroller.getHeight(), design::kColumnHeight + kStretch - 2 * ChainView::kPadY);
+      auto* lane = findView<GalleryLane>(root);
+      expect(lane != nullptr);
+      if (lane == nullptr) return;
+      const auto laneInChain = chain->getLocalArea(lane, lane->getLocalBounds());
+      // Within a pixel of centre (integer halves on both sides).
+      expectWithinAbsoluteError(laneInChain.getCentreY(), chain->getHeight() / 2, 1);
+    }
+
+    beginTest("without stretch nothing moves");
+    {
+      MockBackend backend(mono->data);
+      ScaledHost host(backend, *mono, fixtures.root);
+      pump(100);
+      auto& root = host.pluginRoot();
+      expectEquals(root.stretch(), 0);
+      expectEquals(host.getHeight(), kMinH);
+      auto* chain = findView<ChainView>(root);
+      expect(chain != nullptr);
+      if (chain == nullptr) return;
+      expectEquals(chain->getHeight(), design::kColumnHeight);
+      expectEquals(chain->scroller().getY(), ChainView::kPadY);
+    }
+
+    beginTest("the block detail keeps its back link in place and centres the card below it");
+    {
+      MockBackend backend(detail->data);
+      ScaledHost host(backend, stretched(*detail, kStretch), fixtures.root);
+      pump(400);
+      auto& root = host.pluginRoot();
+      auto* view = findView<BlockDetail>(root);
+      auto* back = findView<BackLink>(root);
+      auto* card = findView<BlockCard>(root);
+      expect(view != nullptr && back != nullptr && card != nullptr);
+      if (view == nullptr || back == nullptr || card == nullptr) return;
+      expectEquals(view->getHeight(), design::kColumnHeight + kStretch);
+      expectEquals(view->getLocalArea(back, back->getLocalBounds()).getY(), BlockDetail::kPadY);
+      const auto cardInView = view->getLocalArea(card, card->getLocalBounds());
+      expectEquals(cardInView.getY(), kStretch / 2 + BlockDetail::kPadY + BackLink::kHeight + BlockDetail::kBackGap);
+      expectEquals(view->getHeight() - cardInView.getBottom(), kStretch / 2 + BlockDetail::kPadY);
+    }
+
+    beginTest("a stretched window gives the strip its chrome from the stretch, not the scale");
+    {
+      MockBackend backend(mono->data);
+      // Hints off: the window opens at the core height plus the stretch.
+      auto scenario = stretched(*mono, kStretch);
+      scenario.data.getDynamicObject()->setProperty("hints", false);
+      ScaledHost host(backend, scenario, fixtures.root);
+      pump(100);
+      auto& root = host.pluginRoot();
+      expectEquals(root.stretch(), kStretch);
+      expectEquals(host.getHeight(), design::kHeight + kStretch);
+      // A host that refuses the grow: the column gives up the strip's height.
+      const int before = host.getHeight();
+      root.services().hints.setEnabled(true);
+      pump(50);
+      expectEquals(host.getHeight(), before + design::kHintHeight);  // the grow was asked for
+      host.setSize(host.getWidth(), before);  // the refusal
+      pump(50);
+      expectWithinAbsoluteError(root.services().zoom.factor(), 1.0, 1e-9);
+      expectEquals(root.stretch(), kStretch - design::kHintHeight);
+      expectEquals(root.designHeight(), before);
+    }
+  }
+};
+
+// AuthFlow::deviceOnly (the iOS AUv3): Login opens the sign-in screen on
+// the device page itself, with no Copy Link (the app line under the cards
+// is in the scenario capture); the expired code offers New code alone.
+// Drives the `load-oauth-app-device*` scenarios.
+struct DeviceOnlySignInTests : juce::UnitTest {
+  DeviceOnlySignInTests() : juce::UnitTest("Sign-in: device only", "ui") {}
+
+  void runTest() override {
+    using Phase = ToneSession::AuthFlow::Phase;
+    {
+      beginTest("Login lands on the device page: code shown, nothing to copy");
+      LiveScenario live(*this, "load-oauth-app-device");
+      if (live.backend == nullptr || live.peer == nullptr) return;
+      auto& root = live.root();
+      live.drive();  // Account: → Login
+      const auto& flow = root.services().session.authFlow();
+      expect(flow.phase == Phase::leaving && flow.deviceOnly && flow.device.has_value());
+      expect(root.signInShown());
+      auto* screen = drive::find(root, [](juce::Component& c) { return c.getName() == "sign in"; });
+      expect(screen != nullptr);
+      if (screen == nullptr) return;
+      const auto shown = [&](const juce::String& name) {
+        auto* b = drive::buttonNamed(*screen, name);
+        return b != nullptr && b->isShowing();
+      };
+      expect(!shown("Copy Link"), "Copy Link has no URL to copy in an extension");
+      expect(!shown("Sign in on a different device"), "the device page is the page");
+      expect(drive::find(*screen, [](juce::Component& c) { return dynamic_cast<QrCode*>(&c) != nullptr && c.isShowing(); }) !=
+             nullptr);
+
+      beginTest("the back arrow abandons the flow and takes the screen down");
+      if (auto* back = drive::find(*screen, [](juce::Component& c) { return dynamic_cast<BackLink*>(&c) != nullptr; }))
+        drive::click(root, *back);
+      expect(LiveScenario::until([&] { return !root.signInShown(); }));
+      expect(flow.phase == Phase::idle);
+    }
+    {
+      beginTest("an expired code offers New code alone");
+      LiveScenario live(*this, "load-oauth-app-device-expired");
+      if (live.backend == nullptr || live.peer == nullptr) return;
+      auto& root = live.root();
+      live.drive();
+      auto* screen = drive::find(root, [](juce::Component& c) { return c.getName() == "sign in"; });
+      expect(screen != nullptr);
+      if (screen == nullptr) return;
+      auto* newCode = drive::buttonNamed(*screen, "New code");
+      expect(newCode != nullptr && newCode->isShowing());
+      auto* copy = drive::buttonNamed(*screen, "Copy Link");
+      expect(copy == nullptr || !copy->isShowing(), "no authorize URL to copy in an extension");
+    }
+  }
+};
+
+
 HtmlTests htmlTests;
 FontTests fontTests;
 RichFlowTests richFlowTests;
+WindowFitTests windowFitTests;
 AccessibilityTests accessibilityTests;
 BrowserAccessibilityTests browserAccessibilityTests;
 ToggleContextAccessibilityTests toggleContextAccessibilityTests;
@@ -3388,6 +3856,7 @@ GlowCornerTests glowCornerTests;
 PresetReorderTests presetReorderTests;
 ChainCrossLaneDragTests chainCrossLaneDragTests;
 BlockSizeToggleTests blockSizeToggleTests;
+MidiMapCommitTests midiMapCommitTests;
 KnobReadoutTests knobReadoutTests;
 FaceplateEffectsTests faceplateEffectsTests;
 FaceplateDualMonoTests faceplateDualMonoTests;
@@ -3400,6 +3869,8 @@ PaginatorTests paginatorTests;
 DragScrollerTests dragScrollerTests;
 UiPrefsTests uiPrefsTests;
 Tone3000ClientTests tone3000ClientTests;
+Tone3000SessionTests tone3000SessionTests;
+DeviceOnlySignInTests deviceOnlySignInTests;
 ToneModelTests toneModelTests;
 ToneQueryTests toneQueryTests;
 ReadoutTests readoutTests;
