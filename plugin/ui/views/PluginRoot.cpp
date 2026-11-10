@@ -4,6 +4,7 @@
 #include "core/Help.h"
 #include "core/NoDefaultFocus.h"
 #include "core/Theme.h"
+#include "widgets/AccessibleGroup.h"
 #include "widgets/SecondaryPress.h"
 #include "views/gallery/GalleryTile.h"
 
@@ -25,6 +26,8 @@ PluginRoot::PluginRoot(Services& services)
       pointerTracker_(services.pointer, *this) {
   setOpaque(true);
   setFocusContainerType(FocusContainerType::keyboardFocusContainer);
+  // Read when a screen reader enters the plugin; Settings can turn the keys off.
+  setDescription("Press greater than or less than to move to the next or previous group of controls.");
 
   header_.onToggleTuner = [this](bool show) { setTunerShown(show); };
   header_.onStereoToggle = [this](bool stereo) {
@@ -370,6 +373,8 @@ bool PluginRoot::FocusPolicy::keyPressed(const juce::KeyPress& key, juce::Compon
   // it when the OS activates it) is nothing focused as far as the UI goes.
   auto* focused = juce::Component::getCurrentlyFocusedComponent();
   if (focused != nullptr && root_.isParentOf(focused)) return false;
+  // Nothing focused: > enters the first group, < the last.
+  if (root_.handleGroupKey(key)) return true;
   if (key.isKeyCode(juce::KeyPress::tabKey)) {
     // The Settings takeover is its own Tab cycle while it is up: its content
     // is out of the root's order, and the chrome under it must stay out of
@@ -415,7 +420,31 @@ DragScroller* PluginRoot::frontScroller() {
   return &main_.chainScreen().scroller();
 }
 
+bool PluginRoot::handleGroupKey(const juce::KeyPress& key) {
+  bool forward = true;
+  if (!a11y::isGroupKey(key, forward)) return false;
+  if (!services_.prefs.getBool(UiPrefs::kGroupNavigationKeys, true)) return false;
+  if (frontModal() != nullptr) return false;
+  auto* focused = getCurrentlyFocusedComponent();
+  if (focused != nullptr) {
+    if (overlay_.isParentOf(focused)) return false;  // a menu or deck: its own keys
+    for (auto* c = focused; c != nullptr; c = c->getParentComponent())
+      if (dynamic_cast<juce::TextEditor*>(c) != nullptr) return false;  // typing
+  }
+  juce::Component* scope = settingsInFront();
+  if (scope == nullptr) scope = this;
+  auto* group = a11y::moveToGroup(*scope, forward);
+  if (group == nullptr) return false;
+#if JUCE_MAC
+  // NVDA and Narrator name a group as focus enters it; VoiceOver reads only
+  // the control, so say where it landed.
+  help::announce(group->getTitle() + " group");
+#endif
+  return true;
+}
+
 bool PluginRoot::keyPressed(const juce::KeyPress& key) {
+  if (handleGroupKey(key)) return true;
   if (key != juce::KeyPress::escapeKey) return false;
   auto* focused = getCurrentlyFocusedComponent();
   if (focused == nullptr || !isParentOf(focused)) return false;

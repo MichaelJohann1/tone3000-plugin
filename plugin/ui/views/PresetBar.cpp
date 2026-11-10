@@ -587,6 +587,7 @@ PresetBar::PresetBar(Services& services)
       name_(std::make_unique<NameButton>()),
       savePanel_(std::make_unique<SavePanel>(*this)),
       browsePanel_(std::make_unique<BrowsePanel>(*this)) {
+  a11y::makeGroup(*this, "Presets");
   prev_->onClick = [this] { step(-1); };
   next_->onClick = [this] { step(1); };
   name_->onClick = [this] { openBrowsePanel(); };

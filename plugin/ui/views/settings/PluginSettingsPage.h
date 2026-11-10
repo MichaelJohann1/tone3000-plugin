@@ -46,6 +46,7 @@ private:
   Services& services_;
 
   ToggleRow infoBar_;
+  ToggleRow groupKeys_;
   // View-only toggles for the faceplate's gate / pitch groups; the
   // Faceplate shows a powered effect regardless.
   ToggleRow showGate_, showPitch_;

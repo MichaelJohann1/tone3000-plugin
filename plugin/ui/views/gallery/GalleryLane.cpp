@@ -49,6 +49,7 @@ private:
 };
 
 GalleryLane::GalleryLane(Services& services, ChainSide side) : services_(services), side_(side) {
+  a11y::makeGroup(*this, "Chain");
   setInterceptsMouseClicks(false, true);
 }
 
@@ -111,6 +112,9 @@ void GalleryLane::setBranch(bool stereo, const std::optional<ChainBranch>& branc
   stereo_ = stereo;
   branch_ = branch;
   branchInteractive_ = interactive;
+  // The same lane names the tiles' descriptions use (ChainView).
+  const juce::String title = !stereo ? "Chain" : side_ == ChainSide::left ? "Left chain" : "Right chain";
+  if (getTitle() != title) setTitle(title);
   rebuildBranchGaps();
   resized();
 }

@@ -153,6 +153,11 @@ private:
   // keys go with nothing focused; none under a modal or on a screen that
   // does not scroll.
   DragScroller* frontScroller();
+  // < and > move between groups of controls (widgets/AccessibleGroup.h) on
+  // the screen in front. Not in a text field, a menu or under a dialog, and
+  // not when Plugin Settings has them off: printable keys belong to the
+  // host otherwise (WCAG 2.1.4).
+  bool handleGroupKey(const juce::KeyPress& key);
 
   Services& services_;
   PluginHeader header_;

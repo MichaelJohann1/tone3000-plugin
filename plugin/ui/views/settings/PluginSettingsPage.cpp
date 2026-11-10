@@ -87,6 +87,9 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
       services_(services),
       infoBar_("Show Info Bar",
                "Shows help text on hover explaining what elements do, plus keyboard shortcuts and a CPU meter."),
+      groupKeys_("Group Navigation Keys",
+                 "Press > and < to jump to the next or previous group of controls. Turn off if these keys "
+                 "conflict with your host or speech input."),
       showGate_("Show Gate", "Reduces unwanted noise like hum and hiss while you're playing."),
       showPitch_("Show Pitch Shift",
                  "Transpose your instrument up or down without retuning or use a MIDI expression pedal for "
@@ -147,6 +150,8 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
   // Info Bar.
   infoBar_.onChange = [this](bool on) { services_.hints.setEnabled(on); };
   add(infoBar_);
+  groupKeys_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kGroupNavigationKeys, on); };
+  add(groupKeys_);
 
   // Gate / pitch: view settings the faceplate reads from the same keys.
   showGate_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowGateControl, on); };
@@ -251,13 +256,14 @@ PluginSettingsPage::~PluginSettingsPage() {
 }
 
 void PluginSettingsPage::prefChanged(const juce::String& key) {
-  if (key == UiPrefs::kShowHints || key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl ||
+  if (key == UiPrefs::kShowHints || key == UiPrefs::kGroupNavigationKeys || key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl ||
       key == UiPrefs::kShowBlockSizeControl || key == UiPrefs::kShowBlockNormalizeControl)
     syncPrefs();
 }
 
 void PluginSettingsPage::syncPrefs() {
   infoBar_.setValue(services_.hints.enabled());
+  groupKeys_.setValue(services_.prefs.getBool(UiPrefs::kGroupNavigationKeys, true));
   showGate_.setValue(services_.prefs.getBool(UiPrefs::kShowGateControl, true));
   showPitch_.setValue(services_.prefs.getBool(UiPrefs::kShowPitchControl, false));
   const bool size = services_.prefs.getBool(UiPrefs::kShowBlockSizeControl, false);

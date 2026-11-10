@@ -55,6 +55,7 @@
 #include "views/gallery/GalleryLane.h"
 #include "views/modals/UpdateNotice.h"
 #include "views/modals/ConnectionModal.h"
+#include "widgets/AccessibleGroup.h"
 #include "widgets/RichTextView.h"
 #include "widgets/ChromeIconButton.h"
 #include "widgets/Avatar.h"
@@ -1653,6 +1654,80 @@ struct BranchAccessibilityTests : juce::UnitTest {
   }
 };
 BranchAccessibilityTests branchAccessibilityTests;
+
+struct GroupNavigationTests : juce::UnitTest {
+  GroupNavigationTests() : juce::UnitTest("Group navigation", "ui") {}
+
+  static bool press(LiveScenario& live, juce::juce_wchar c) {
+    return live.peer->handleKeyPress(juce::KeyPress(c, juce::ModifierKeys::shiftModifier, c));
+  }
+  static juce::String groupOfFocus(PluginRoot& root) {
+    auto* group = a11y::enclosingGroup(LiveScenario::focused(), &root);
+    return group != nullptr ? group->getTitle() : juce::String("(none)");
+  }
+
+  void runTest() override {
+    beginTest("screen readers see controls nested in named groups");
+    LiveScenario live(*this, "main-stereo");
+    expect(live.ok);
+    if (!live.ok) return;
+    auto& root = live.root();
+    auto* input = dynamic_cast<Knob*>(drive::find(root, [](juce::Component& c) {
+      return dynamic_cast<Knob*>(&c) != nullptr && c.getTitle() == "Input" && c.isShowing();
+    }));
+    auto* output = dynamic_cast<Knob*>(drive::find(root, [](juce::Component& c) {
+      return dynamic_cast<Knob*>(&c) != nullptr && c.getTitle() == "Output" && c.isShowing();
+    }));
+    expect(input != nullptr && output != nullptr);
+    if (input == nullptr || output == nullptr) return;
+
+    auto* handler = input->getAccessibilityHandler();
+    expect(handler != nullptr);
+    if (handler != nullptr) {
+      auto* section = handler->getParent();
+      expect(section != nullptr && section->getRole() == juce::AccessibilityRole::group);
+      expect(section != nullptr && section->getTitle() == "Input");
+      auto* plate = section != nullptr ? section->getParent() : nullptr;
+      expect(plate != nullptr && plate->getTitle() == "Global controls");
+    }
+
+    beginTest("the faceplate's Tab order reads left to right");
+    const auto order = juce::KeyboardFocusTraverser().getAllComponents(&root);
+    const auto indexOf = [&](juce::Component* c) { return std::find(order.begin(), order.end(), c) - order.begin(); };
+    expect(indexOf(input) < indexOf(output));
+    auto* bass = drive::find(root, [](juce::Component& c) { return c.getTitle() == "Bass" && c.isShowing(); });
+    expect(bass != nullptr && indexOf(input) < indexOf(bass) && indexOf(bass) < indexOf(output));
+
+    beginTest("> and < walk the groups and wrap");
+    expect(LiveScenario::focused() == nullptr);
+    expect(press(live, '>'));
+    expectEquals(groupOfFocus(root), juce::String("Presets"));
+    juce::StringArray visited{groupOfFocus(root)};
+    for (int i = 0; i < 20; ++i) {
+      expect(press(live, '>'));
+      if (groupOfFocus(root) == "Presets") break;
+      visited.add(groupOfFocus(root));
+    }
+    for (auto name : {"Toolbar", "Input", "Gate", "Tone stack", "Output"})
+      expect(visited.contains(name), juce::String("visits ") + name + ": " + visited.joinIntoString(", "));
+    expect(visited.indexOf("Toolbar") < visited.indexOf("Input"));
+    expect(visited.indexOf("Input") < visited.indexOf("Output"));
+    expectEquals(groupOfFocus(root), juce::String("Presets"), "wraps to the first group");
+    expect(press(live, '<'));
+    expectEquals(groupOfFocus(root), juce::String("Output"), "< from the first group wraps to the last");
+    expect(press(live, '<'));
+    expectEquals(groupOfFocus(root), visited[visited.size() - 2]);
+
+    beginTest("the keys can be turned off");
+    root.services().prefs.setBool(UiPrefs::kGroupNavigationKeys, false);
+    auto* before = LiveScenario::focused();
+    expect(!press(live, '>'));
+    expect(LiveScenario::focused() == before);
+    root.services().prefs.setBool(UiPrefs::kGroupNavigationKeys, true);
+    live.key(juce::KeyPress::escapeKey);
+  }
+};
+GroupNavigationTests groupNavigationTests;
 
 struct ToggleContextAccessibilityTests : juce::UnitTest {
   ToggleContextAccessibilityTests() : juce::UnitTest("Toggle and context accessibility", "ui") {}

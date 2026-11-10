@@ -94,3 +94,25 @@ changes to dialogs, editor activation or accessibility announcements.
 - Opening Tuner focuses its reading. Verify note, octave, hertz, and cents flat/sharp or in tune (within 5 cents). The first detected note is spoken once per opening while the reading has focus; Enter or R repeats. Tab reaches Close tuner; Escape closes. Check no signal after the normal signal hold expires.
 
 - Branch: in Stereo mode, activate Branch after an effect. Verify the other lane taps that effect, the control becomes Remove branch after, checked state changes, and focus stays there. Activate again to make lanes independent.
+
+## Control groups and the < / > keys
+
+Related controls sit in named groups: Presets, Toolbar, the chain lanes
+(Chain, or Left chain and Right chain in Stereo), Tone editor with its EQ
+row, and Global controls with Input, Gate, Pitch, Tone stack, Spread or
+Align, and Output. In the tone browser: Select Tone, Filters and Results.
+Groups do not change Tab order, except that the header and faceplate now
+tab left to right as they read.
+
+1. VoiceOver: in the plugin, VO+Right walks the top-level groups.
+   VO+Shift+Down enters a group; VO+Shift+Up leaves it. Check each group
+   speaks its name.
+2. Press > and <, with VoiceOver on and off. Focus moves to the first
+   control of the next or previous group and wraps at the ends. With
+   nothing focused, > goes to the first group and < to the last. On macOS
+   the group's name is announced; NVDA and Narrator name the group as focus
+   enters it.
+3. Check < and > still type in text fields (preset name, tone search) and
+   do nothing inside open menus, advanced decks or dialogs.
+4. Turn off Plugin Settings → Group Navigation Keys. The keys pass to the
+   host again (for example REAPER's own shortcuts).

@@ -119,6 +119,7 @@ StereoImageGroup::StereoImageGroup(Services& services, ImageFeature feature)
       offset_(services.backend, imageFeaturePrefix(feature) + "Offset", offsetKnob(copyFor(feature))),
       power_(Icon::Power, ChromeIconButton::Tone::power, copyFor(feature).power),
       deck_(services, feature) {
+  a11y::makeGroup(*this, copyFor(feature).label);
   advert_->onClick = [this] {
     enabled_.set(true);
     syncEnabled();
