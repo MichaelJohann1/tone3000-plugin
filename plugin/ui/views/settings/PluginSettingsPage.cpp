@@ -4,6 +4,7 @@
 #include "core/Fonts.h"
 #include "core/Paint.h"
 #include "core/Theme.h"
+#include "widgets/AccessibleGroup.h"
 #include "widgets/TextField.h"
 
 namespace t3k::ui {
@@ -87,9 +88,6 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
       services_(services),
       infoBar_("Show Info Bar",
                "Shows help text on hover explaining what elements do, plus keyboard shortcuts and a CPU meter."),
-      groupKeys_("Group Navigation Keys",
-                 "Press > and < to jump to the next or previous group of controls. Turn off if these keys "
-                 "conflict with your host or speech input."),
       showGate_("Show Gate", "Reduces unwanted noise like hum and hiss while you're playing."),
       showPitch_("Show Pitch Shift",
                  "Transpose your instrument up or down without retuning or use a MIDI expression pedal for "
@@ -149,15 +147,15 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
       version_(juce::String(), form::kSmallPx, theme::kSubtle) {
   // Info Bar.
   infoBar_.onChange = [this](bool on) { services_.hints.setEnabled(on); };
-  add(infoBar_);
-  groupKeys_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kGroupNavigationKeys, on); };
-  add(groupKeys_);
+  display_.add(infoBar_);
 
   // Gate / pitch: view settings the faceplate reads from the same keys.
   showGate_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowGateControl, on); };
   showPitch_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowPitchControl, on); };
-  add(showGate_);
-  add(showPitch_);
+  display_.add(showGate_);
+  display_.add(showPitch_);
+  a11y::makeGroup(display_, "Display");
+  add(display_);
 
   // NAM A2 Size.
   namSize_.setInlineLabel();
@@ -166,15 +164,17 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
   namSize_.content().add(full_);
   lite_.onSelect = [this] { services_.chain.setNamSlimSizeDefault(kSlimSizeLite); };
   full_.onSelect = [this] { services_.chain.setNamSlimSizeDefault(kSlimSizeFull); };
-  add(namSize_);
+  models_.add(namSize_);
 
   // Per-block controls.
   blockSize_.content().add(blockSizeTip_);
   blockSize_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowBlockSizeControl, on); };
-  add(blockSize_);
+  models_.add(blockSize_);
   normalize_.content().add(normalizeTip_);
   normalize_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowBlockNormalizeControl, on); };
-  add(normalize_);
+  models_.add(normalize_);
+  a11y::makeGroup(models_, "NAM models");
+  add(models_);
 
   // Calibration.
   calibration_.content().add(*dbu_);
@@ -183,7 +183,7 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
   calibration_.content().add(calibrationHandoff_);
   calibrationHelp_.onLink = [](const juce::String& href) { juce::URL(href).launchInDefaultBrowser(); };
   calibration_.onChange = [this](bool on) { setAndRemember(calibrateParam_, on ? 1.0f : 0.0f); };
-  add(calibration_);
+  processing_.add(calibration_);
 
   // Oversampling.
   oversampling_.content().setGap(8);
@@ -195,15 +195,18 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
       setAndRemember(osFactorParam_, p->convertTo0to1(v.getFloatValue()));
   };
   oversampling_.onChange = [this](bool on) { setAndRemember(osEnabledParam_, on ? 1.0f : 0.0f); };
-  add(oversampling_);
+  processing_.add(oversampling_);
 
   // Multi-core.
   multiCore_.onChange = [this](bool on) { services_.chain.setMultiCore(on); };
-  add(multiCore_);
+  processing_.add(multiCore_);
+  a11y::makeGroup(processing_, "Audio processing");
+  add(processing_);
 
   // MIDI Mapping.
   midi_.setInlineLabel();
   midi_.content().add(midiSection_);
+  a11y::makeGroup(midi_, "MIDI Mapping");
   add(midi_);
 
   // Presets: a link to the folder the files live in. Hidden where there is
@@ -212,6 +215,7 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
     presets_.setInlineLabel();
     presets_.content().add(openPresetsBox_);
     openPresets_.onClick = [this] { services_.backend.openPresetsFolder(); };
+    a11y::makeGroup(presets_, "Presets");
     add(presets_);
   }
 
@@ -228,6 +232,7 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
   revealLogs_.onClick = [this] {
     showLogStatus(services_.backend.revealLogs().isNotEmpty() ? "Revealed log file" : "No log file found yet");
   };
+  a11y::makeGroup(diagnostics_, "Diagnostics");
   add(diagnostics_);
 
   // Version / update footer.
@@ -236,6 +241,7 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
   update_.onClick = [this] {
     if (const auto& u = services_.updates.update()) juce::URL(u->url).launchInDefaultBrowser();
   };
+  a11y::makeGroup(footer_, "Updates");
   add(footer_);
 
   for (auto* p : {&calibrateParam_, &dbuParam_, &osEnabledParam_, &osFactorParam_})
@@ -256,14 +262,13 @@ PluginSettingsPage::~PluginSettingsPage() {
 }
 
 void PluginSettingsPage::prefChanged(const juce::String& key) {
-  if (key == UiPrefs::kShowHints || key == UiPrefs::kGroupNavigationKeys || key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl ||
+  if (key == UiPrefs::kShowHints || key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl ||
       key == UiPrefs::kShowBlockSizeControl || key == UiPrefs::kShowBlockNormalizeControl)
     syncPrefs();
 }
 
 void PluginSettingsPage::syncPrefs() {
   infoBar_.setValue(services_.hints.enabled());
-  groupKeys_.setValue(services_.prefs.getBool(UiPrefs::kGroupNavigationKeys, true));
   showGate_.setValue(services_.prefs.getBool(UiPrefs::kShowGateControl, true));
   showPitch_.setValue(services_.prefs.getBool(UiPrefs::kShowPitchControl, false));
   const bool size = services_.prefs.getBool(UiPrefs::kShowBlockSizeControl, false);

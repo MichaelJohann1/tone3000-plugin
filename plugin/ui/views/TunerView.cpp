@@ -76,10 +76,11 @@ private:
 TunerView::TunerView(Services& services)
     : feed_(services.backend, services.clock), up_(std::make_unique<Triangle>(true)), down_(std::make_unique<Triangle>(false)) {
   setOpaque(true);
+  // A Tab stop for screen readers; a click never focuses it, so the host's
+  // keys keep working. No help text: the hint bar shows nothing here.
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(true);
+  setMouseClickGrabsKeyboardFocus(false);
   setTitle("Tuner reading");
-  setHelpText("Play one note. The reading gives note, octave, frequency and cents flat or sharp. The first detected note is spoken once while focused. Enter or R: repeat reading. Escape: close tuner. Tab: Close tuner.");
   close_.setName("Close tuner");
   close_.onClick = [this] {
     if (onClose) onClose();
@@ -243,10 +244,15 @@ std::unique_ptr<juce::AccessibilityHandler> TunerView::createAccessibilityHandle
   private:
     TunerView& view_;
   };
+  // Spoken only: the keys.
+  struct Handler : juce::AccessibilityHandler {
+    using juce::AccessibilityHandler::AccessibilityHandler;
+    juce::String getHelp() const override { return "Play one note. Enter or R repeats the reading. Escape closes the tuner."; }
+  };
   juce::AccessibilityHandler::Interfaces interfaces;
   interfaces.value = std::make_unique<Reading>(*this);
-  return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::staticText,
-      juce::AccessibilityActions(), std::move(interfaces));
+  return std::make_unique<Handler>(*this, juce::AccessibilityRole::staticText, juce::AccessibilityActions(),
+                                   std::move(interfaces));
 }
 
 }  // namespace t3k::ui

@@ -130,8 +130,8 @@ void FilterBar::buildChips() {
     auto chip = std::make_unique<FilterChip>(filter.label);
     chip->setLeadingSvg(gear::svgFor(filter.id));
     chip->setToggleable(true);
-    chip->setHelpText(juce::String(filter.label) + ": " + filter.description
-                      + " Filters the tone list; choose a tone from the results to load it. Press again to show all types.");
+    chip->setHelpText(help::text(help::Key::browserGear));
+    chip->setDescription(juce::String::fromUTF8(filter.description));  // screen readers only
     chip->onPress = [this, id = juce::String(filter.id), label = juce::String(filter.label)] {
       query_.gear = query_.gear == id ? juce::String() : id;
       help::announce(query_.gear.isEmpty() ? "Showing all gear types. Loading tones."

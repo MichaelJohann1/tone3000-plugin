@@ -167,9 +167,9 @@ void ChainView::applyLanes() {
           context += item.params.enabled ? ", enabled" : ", bypassed";
           context += item.loadFailed ? ", load failed" : (item.modelLoading || !item.loaded ? ", loading" : ", loaded");
         } else context += ", add tone slot";
-        tile->setDescription(context + ". Enter: open. Space: pick up for moving. Left and Right: move. "
-            + (stereo() ? juce::String("Up and Down: change chain. ") : juce::String())
-            + "Space or Enter: drop. Escape: cancel move. Shift+F10: menu, including Load File and Load Folder.");
+        // Short: read on every visit. The move keys are spoken when a move
+        // starts ("Moving ...").
+        tile->setDescription(context + ". Enter opens, Space moves, Shift+F10 for more.");
       }
     }
   }

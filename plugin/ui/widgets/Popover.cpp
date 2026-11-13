@@ -7,9 +7,39 @@
 
 namespace t3k::ui {
 
+namespace {
+
+// The keyboard-focused control that opened a panel anchored on `anchor`:
+// the anchor itself, something inside it, or a control in the same
+// right-click group (a group's power button opening the panel on its knob).
+// A mouse open leaves nothing focused here (no click takes focus), so it
+// returns nullptr and the panel leaves focus alone on close, as before.
+juce::Component* focusedOpener(juce::Component& anchor) {
+  auto* focused = juce::Component::getCurrentlyFocusedComponent();
+  if (focused == nullptr) return nullptr;
+  if (focused == &anchor || anchor.isParentOf(focused)) return focused;
+  for (auto* c = anchor.getParentComponent(); c != nullptr; c = c->getParentComponent())
+    if (dynamic_cast<SecondaryPressTarget*>(c) != nullptr) return c->isParentOf(focused) ? focused : nullptr;
+  return nullptr;
+}
+
+// A panel holding sliders or text fields (the Advanced panels, the save
+// panel) is a dialog to a screen reader; one of rows only is a menu.
+bool holdsControls(juce::Component& root) {
+  for (auto* child : root.getChildren()) {
+    if (auto* handler = child->getAccessibilityHandler()) {
+      const auto role = handler->getRole();
+      if (role == juce::AccessibilityRole::slider || role == juce::AccessibilityRole::editableText) return true;
+    }
+    if (holdsControls(*child)) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 Popover::Popover() {
   setWantsKeyboardFocus(true);
-  setHelpText("Up/Down: move between menu controls. Left/Right: adjust sliders. Tab/Shift+Tab: move between controls, including text fields. Enter: activate or edit. Escape: close.");
   setMouseClickGrabsKeyboardFocus(false);
   setFocusContainerType(FocusContainerType::keyboardFocusContainer);
 }
@@ -22,9 +52,7 @@ void Popover::open(juce::Component& anchor, Align align, int gap, int inset, Pla
   if (host == nullptr) return;
 
   anchor_ = &anchor;
-  auto* focused = getCurrentlyFocusedComponent();
-  contextReturnFocus_ = focused != nullptr && focused != anchor.getTopLevelComponent()
-                            && focused->getTopLevelComponent() == anchor.getTopLevelComponent() ? focused : nullptr;
+  contextReturnFocus_ = focusedOpener(anchor);
   keyboardOpened_ = contextReturnFocus_ != nullptr;
   align_ = align;
   placement_ = placement;
@@ -37,6 +65,7 @@ void Popover::open(juce::Component& anchor, Align align, int gap, int inset, Pla
     setTitle((name.isNotEmpty() ? name + " " : juce::String()) + "menu");
   }
   host->overlayLayer().addAndMakeVisible(this);
+  invalidateAccessibilityHandler();  // the role follows the rows built by now
   reposition();
   follow(anchor);
   watchOutsidePresses();
@@ -53,6 +82,7 @@ void Popover::openAt(juce::Component& context, juce::Point<int> point) {
   point_ = point;
   if (getTitle().isEmpty()) setTitle("Context menu");
   host->overlayLayer().addAndMakeVisible(this);
+  invalidateAccessibilityHandler();
   placeAt(context, point);
   follow(context);
   watchOutsidePresses();
@@ -133,9 +163,11 @@ float Popover::adoptScaleOf(const juce::Component& source) {
 
 void Popover::close() {
   if (!isOpen()) return;
-  // Return to the actual opener, which may be a group's power button even
-  // when the panel is positioned against its knob. Fall back to the anchor
-  // if the recorded opener has disappeared.
+  // Opened from a focused control, or a row focused since (a click never
+  // focuses a row): the keyboard is driving, so focus goes back to the
+  // opener (a group's power button even when the panel sits on its knob),
+  // else the anchor. A mouse-opened panel leaves nothing focused, and the
+  // host's keys work again.
   auto* focused = getCurrentlyFocusedComponent();
   const bool toAnchor = keyboardOpened_ || (focused != nullptr && focused != this && isParentOf(focused));
   keyboardOpened_ = false;
@@ -177,7 +209,19 @@ std::unique_ptr<juce::ComponentTraverser> Popover::createKeyboardFocusTraverser(
 }
 
 std::unique_ptr<juce::AccessibilityHandler> Popover::createAccessibilityHandler() {
-  return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::popupMenu);
+  // Screen readers only: the keys, never in the hint bar (no help text).
+  struct Handler : juce::AccessibilityHandler {
+    Handler(Popover& panel, bool dialog)
+        : juce::AccessibilityHandler(panel, dialog ? juce::AccessibilityRole::dialogWindow
+                                                   : juce::AccessibilityRole::popupMenu),
+          dialog_(dialog) {}
+    juce::String getHelp() const override {
+      return dialog_ ? "Up and Down or Tab move between controls. Left and Right adjust. Escape closes."
+                     : "Up and Down move. Enter chooses. Escape closes.";
+    }
+    bool dialog_;
+  };
+  return std::make_unique<Handler>(*this, holdsControls(*this));
 }
 
 void Popover::focusRow(bool next) {

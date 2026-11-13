@@ -57,7 +57,8 @@ public:
     };
     close_.setActive(false);
     close_.setName("Close");
-    close_.setTitle("Close update notice. Remind me in 1 day");
+    close_.setTitle("Close");
+    close_.setDescription("Reminds you again in 1 day.");
     close_.onClick = [this] { owner_.remind(kDismissDays); };
     for (const auto& option : kRemindOptions) {
       auto button = std::make_unique<LinkButton>(option.label, kRemindPx);

@@ -23,6 +23,9 @@ public:
   ~AccountMenu() override;
 
   void setAuthenticated(bool authenticated);
+  // The signed-in user's name, for screen readers: the button's
+  // description reads "Signed in as <name>" (or "Signed in" / "Signed out").
+  void setUserName(const juce::String& name);
   void setAvatar(ImageLoader& images, const juce::String& url) { avatar_.setImage(images, url); }
   void openMenu();
 
@@ -42,8 +45,12 @@ private:
     MenuRow logout{"Logout", Icon::LogOut};
   };
 
+  void updateDescription();
+
   Avatar avatar_;
   Menu menu_;
+  bool authenticated_ = false;
+  juce::String userName_;
 };
 
 }  // namespace t3k::ui

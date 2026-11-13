@@ -9,7 +9,7 @@
 // presents as a container to step into (VO+Shift+Down) and out of
 // (VO+Shift+Up), and which NVDA and Narrator announce as focus enters it.
 //
-// The same groups are the stops for the < and > keys (moveToGroup): the
+// The same groups are the stops for the period and comma keys (moveToGroup): the
 // next or previous run of controls belonging to a different group. Runs,
 // not groups, because a group with a nested group in the middle (a tone
 // editor with its EQ row) appears twice in the Tab order and should be
@@ -52,8 +52,9 @@ inline std::unique_ptr<juce::AccessibilityHandler> ignoredHandler(juce::Componen
   return std::make_unique<juce::AccessibilityHandler>(component, juce::AccessibilityRole::ignored);
 }
 
-// < (backward) or > (forward), with no Command, Ctrl or Alt held. Shift is
-// allowed: it is how most layouts type them.
+// Comma (backward) or period (forward), unmodified. A modifier leaves the
+// key alone: Shift types < and > on most layouts, and the host may bind
+// Ctrl / Command / Alt combinations.
 bool isGroupKey(const juce::KeyPress& key, bool& forward);
 
 // The innermost group around `component`, stopping at `scope`.

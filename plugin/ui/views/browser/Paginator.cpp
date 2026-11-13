@@ -15,9 +15,8 @@ Paginator::Paginator() {
   // One Tab stop for the whole row (Left / Right turn the page), not one
   // per number; a click never focuses it.
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(true);
+  setMouseClickGrabsKeyboardFocus(false);
   setTitle("Pages");
-  setHelpText("Up or Right: next page. Down or Left: previous page. Home: first page. End: last page.");
   rebuild();
 }
 
@@ -54,10 +53,15 @@ private:
 }  // namespace
 
 std::unique_ptr<juce::AccessibilityHandler> Paginator::createAccessibilityHandler() {
+  // Spoken only: the keys (the hint bar has no hint for the row).
+  struct Handler : juce::AccessibilityHandler {
+    using juce::AccessibilityHandler::AccessibilityHandler;
+    juce::String getHelp() const override { return "Arrows turn the page. Home: first page. End: last page."; }
+  };
   juce::AccessibilityHandler::Interfaces interfaces;
   interfaces.value = std::make_unique<PagesValue>(*this);
-  return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::slider,
-                                                      juce::AccessibilityActions(), std::move(interfaces));
+  return std::make_unique<Handler>(*this, juce::AccessibilityRole::slider, juce::AccessibilityActions(),
+                                   std::move(interfaces));
 }
 
 void Paginator::set(int page, int totalPages) {

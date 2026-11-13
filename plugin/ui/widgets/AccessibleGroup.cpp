@@ -41,13 +41,13 @@ void AccessibleGroup::fitToChildren() {
 
 bool isGroupKey(const juce::KeyPress& key, bool& forward) {
   const auto mods = key.getModifiers();
-  if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
+  if (mods.isShiftDown() || mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
   const auto c = key.getTextCharacter();
-  if (c == '>' || (c == 0 && key.getKeyCode() == '>')) {
+  if (c == '.' || (c == 0 && key.getKeyCode() == '.')) {
     forward = true;
     return true;
   }
-  if (c == '<' || (c == 0 && key.getKeyCode() == '<')) {
+  if (c == ',' || (c == 0 && key.getKeyCode() == ',')) {
     forward = false;
     return true;
   }

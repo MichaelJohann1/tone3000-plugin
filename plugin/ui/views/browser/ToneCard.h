@@ -49,13 +49,12 @@ public:
   void setLoading(bool loading);
   void setDisabled(bool disabled);
   bool canSelect() const { return !disabled_; }
+  // Keyboard / screen reader only (Shift+F10, the Applications key, the
+  // showMenu action on a focused card): "Open on web". A right-click does
+  // nothing here, as before.
   void openMenu(juce::Point<int> point);
   void keyboardContextMenu() override { openMenu(getLocalBounds().getCentre()); }
-  void secondaryPress(const juce::MouseEvent& event) override {
-    openMenu(event.getEventRelativeTo(this).getPosition());
-  }
-  void mouseDown(const juce::MouseEvent& event) override;
-  void mouseUp(const juce::MouseEvent& event) override;
+  void secondaryPress(const juce::MouseEvent&) override {}
   bool keyPressed(const juce::KeyPress& key) override;
   std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
@@ -63,12 +62,8 @@ public:
   void resized() override;
 
 private:
-  class InfoPopover;
-  void showInfo();
   juce::String webUrl() const;
   std::unique_ptr<ContextMenu> menu_;
-  std::unique_ptr<InfoPopover> info_;
-  bool contextPress_ = false;
   static constexpr int kGapX = 16;
   static constexpr float kImageCorner = 8;
   static constexpr int kRowGap = 8;

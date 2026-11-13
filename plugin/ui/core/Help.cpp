@@ -222,7 +222,7 @@ std::map<Key, String> buildTable() {
       U("Calibration: active — levels set from this model’s calibration data.");
   t[Key::blockUncalibrated] = U("Calibration: inactive — this model has no calibration data.");
   t[Key::eqToggle] = U("EQ: 6-band EQ editor. Outline: EQ shaping the sound.");
-  t[Key::toneInfo] = U("Info: use, capture settings and included gear. Tab to the overview, More info for the creator description, or View on TONE3000 for the web page.");
+  t[Key::toneInfo] = U("Info: tone description, makes, and tags from TONE3000.");
   t[Key::toneInfoLogin] = U("Log In: sign in to TONE3000 to see tone details.");
   t[Key::viewOnT3k] = U("View on TONE3000: open this tone in your browser.");
   t[Key::favoriteTone] = U("Favorite: save this tone to your TONE3000 favorites.");
@@ -256,11 +256,7 @@ std::map<Key, String> buildTable() {
   t[Key::cpuLoad] = U("CPU: audio engine load.");
   t[Key::hideHints] = U("Hide Info Bar: hide this bar. Re-enable in Settings.");
 
-  for (auto& [key, value] : t) {
-    value = touchify(value);
-    if (!kTouch && value.contains("Right-click: advanced."))
-      value = value.replace("Right-click: advanced.", "Right-click or Shift+F10: advanced. On Windows, the Applications key also opens advanced.");
-  }
+  for (auto& [key, value] : t) value = touchify(value);
   return t;
 }
 
@@ -280,8 +276,8 @@ const String& text(Key key) {
 }
 
 String toneTile(const String& title) {
-  return kTouch ? title + U(". Tap to adjust parameters for this effect · drag: reorder · touch and hold: menu.")
-                : title + U(". Click or press Enter to adjust parameters for this effect · drag: reorder · ") + alt("drag") +
+  return kTouch ? title + U(". Tap: open · drag: reorder · touch and hold: menu.")
+                : title + U(". Click: open · drag: reorder · ") + alt("drag") +
                       ": duplicate · right-click: copy / load file.";
 }
 
@@ -292,9 +288,32 @@ String lead(const String& hint) {
   return (colon > 0 ? hint.substring(0, colon) : hint).trim();
 }
 
-void announce(const String& text) {
-  if (text.isNotEmpty())
-    juce::AccessibilityHandler::postAnnouncement(text, juce::AccessibilityHandler::AnnouncementPriority::medium);
+namespace {
+std::function<void(const String&)>& announcementObserver() {
+  static std::function<void(const String&)> observer;
+  return observer;
 }
+}  // namespace
+
+String spokenHelp(const String& name, const String& hint) {
+  auto text = hint.trim();
+  const auto n = name.trim();
+  // Spoken only: the keyboard way to the same advanced panel.
+  if (!kTouch) text = text.replace("Right-click: advanced.", "Right-click or Shift+F10: advanced.");
+  if (n.isEmpty() || !text.startsWithIgnoreCase(n)) return text;
+  const auto rest = text.substring(n.length());
+  if (rest.isEmpty()) return {};
+  if (rest[0] != ':' && rest[0] != '.') return text;  // the name runs on ("Undo all")
+  text = rest.substring(1).trim();
+  return text.isEmpty() ? text : text.substring(0, 1).toUpperCase() + text.substring(1);
+}
+
+void announce(const String& text) {
+  if (text.isEmpty()) return;
+  if (auto& observer = announcementObserver()) observer(text);
+  juce::AccessibilityHandler::postAnnouncement(text, juce::AccessibilityHandler::AnnouncementPriority::medium);
+}
+
+void observeAnnouncements(std::function<void(const String&)> observer) { announcementObserver() = std::move(observer); }
 
 }  // namespace t3k::ui::help

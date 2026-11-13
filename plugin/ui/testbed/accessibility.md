@@ -46,16 +46,18 @@ Normal application launches do not enable these previews.
 
 Use a normal REAPER launch, enter the TONE3000 editor with F6, then:
 
-1. Click a power button and adjust a knob by mouse and by NVDA's value
-   controls. NVDA+Tab should report that control; subsequent Tab and arrow
-   keys should work without another F6.
+1. Click a power button and adjust a knob by mouse, then by NVDA's value
+   controls. A mouse click never takes keyboard focus (as upstream), so
+   the host keeps Space and its shortcuts; Tab (or NVDA's focus) reaches
+   the control, after which the arrow keys adjust it without another F6.
 2. Open an option menu, then dismiss it. Focus should return to its button.
 3. Activate an empty slot. Focus should move into Select Tone. Activate
    Amp Head or Spaces: its checked state and the loading announcement should
    change, then the result count or empty/error message should be spoken.
-4. Read each gear filter's accessible help, also shown in the app's hint
-   bar when hints are enabled. These controls filter the list; choosing a
-   result loads a tone. Pressing a selected filter again clears it.
+4. Read each gear filter's accessible description (the gear's definition,
+   spoken only; the hint bar keeps its upstream text). These controls
+   filter the list; choosing a result loads a tone. Pressing a selected
+   filter again clears it.
 5. While signed out, choosing a result opens the sign-in prompt. Its button
    exposes the explanation through accessible help and description.
 
@@ -85,34 +87,58 @@ changes to dialogs, editor activation or accessibility announcements.
 - Context menus and advanced panels: Up/Down moves between controls; Left/Right adjusts a focused slider. Tab/Shift+Tab also moves between controls. In text entry fields use Tab/Shift+Tab so arrow keys remain available for editing. Enter activates or edits; Escape closes and restores focus.
 - Tone-results Pages: Up/Right advances, Down/Left goes back, Home/End selects first/last. Verify the accessible page value changes.
 - Mono/Stereo: activation announces the selected mode and exposes checked state.
-- Tone results: the original creator description appears in accessible help and the visual hint bar, including any pack links. Empty descriptions fall back to gear help. Concise Use / Settings / Includes overviews remain in More info.
-- Browsing results: Shift+F10, Applications key, or the screen reader's Show menu action opens More info / Open on web. More info opens a scrollable overview without loading a tone; Tab reaches the readable text, full creator description toggle, web link and Close. Escape returns to the browsing result. Inspection remains available when a tone cannot be loaded.
+- Tone results: the original creator description is the card's accessible description (spoken only; the card shows no hint-bar text, as upstream).
+- Browsing results: with keyboard focus on a card, Shift+F10, the Applications key, or the screen reader's Show menu action opens a menu with Open on web. A right-click does nothing new (upstream). Escape returns to the card. Cards for tones the plugin cannot load are disabled, as upstream; their description starts "Unavailable in the plugin."
 - Loaded tones: Tab to the tone tile and press Enter to open its card. Shift+F10 or the Applications key opens the tile menu; Up/Down selects an action, Enter activates, Escape closes. Space on the tile is reserved for reordering.
-- In the tone card, Tab to Info and press Enter. Focus moves to the readable overview (or the sign-in/retry prompt), including after details finish loading. Tab reaches More info and View on TONE3000. More info reveals a focusable paragraph containing the original creator text; Less info hides it. Verify NVDA reads both text paragraphs and announces the More info toggle state. Enter on View on TONE3000 opens the tone web page. Catalog details require sign-in; local file tones have no catalog Info button.
+- In the tone card, Tab to Info and press Enter. The panel looks as upstream (description with MORE / LESS, Makes & Models, Tags). Focus moves to an invisible Description stop that reads the whole creator text (or to the sign-in/retry prompt), including after details finish loading; Tab reaches Makes & Models, Tags and View on TONE3000. Enter on View on TONE3000 opens the tone web page. Catalog details require sign-in; local file tones have no catalog Info button.
+- Escape is the front screen's Back: it closes Settings, the tuner, the sign-in page, the tone browser or an open tone card, and returns focus to the control that opened it. In a text field, menu or dialog it only does what it did before.
 - In an opened tone, Favorites announces Add to favorites or Remove from favorites and its checked state. Enter toggles it while retaining focus. Signed-out favorites are disabled.
 - Enter on EQ moves focus into its controls. Bypassed EQ focuses EQ Power first. In the slider view, Tab visits adjustable gain faders; Up/Down changes gain by 0.5 dB, Shift+Up/Down by 0.1 dB, and Home/End select the minimum/maximum gain. NVDA exposes each fader's band, frequency and gain value. Cut bands have no adjustable gain in this view.
 - Opening Tuner focuses its reading. Verify note, octave, hertz, and cents flat/sharp or in tune (within 5 cents). The first detected note is spoken once per opening while the reading has focus; Enter or R repeats. Tab reaches Close tuner; Escape closes. Check no signal after the normal signal hold expires.
 
 - Branch: in Stereo mode, activate Branch after an effect. Verify the other lane taps that effect, the control becomes Remove branch after, checked state changes, and focus stays there. Activate again to make lanes independent.
 
-## Control groups and the < / > keys
+## Control groups and the period and comma keys
 
 Related controls sit in named groups: Presets, Toolbar, the chain lanes
 (Chain, or Left chain and Right chain in Stereo), Tone editor with its EQ
 row, and Global controls with Input, Gate, Pitch, Tone stack, Spread or
 Align, and Output. In the tone browser: Select Tone, Filters and Results.
-Groups do not change Tab order, except that the header and faceplate now
-tab left to right as they read.
+In Settings: Settings pages (standalone), Display, NAM models, Audio
+processing, MIDI Mapping, Presets, Diagnostics and Updates on the Plugin
+page; Monitoring, Audio Interface and MIDI Inputs on the System page.
+Groups do not change Tab order, except that the header and faceplate tab
+left to right as they read.
 
 1. VoiceOver: in the plugin, VO+Right walks the top-level groups.
    VO+Shift+Down enters a group; VO+Shift+Up leaves it. Check each group
    speaks its name.
-2. Press > and <, with VoiceOver on and off. Focus moves to the first
-   control of the next or previous group and wraps at the ends. With
-   nothing focused, > goes to the first group and < to the last. On macOS
-   the group's name is announced; NVDA and Narrator name the group as focus
-   enters it.
-3. Check < and > still type in text fields (preset name, tone search) and
-   do nothing inside open menus, advanced decks or dialogs.
-4. Turn off Plugin Settings → Group Navigation Keys. The keys pass to the
-   host again (for example REAPER's own shortcuts).
+2. Press period and comma, with VoiceOver on and off. Focus moves to the
+   first control of the next or previous group and wraps at the ends. With
+   nothing focused, period goes to the first group and comma to the last.
+   On macOS the group's name is announced; NVDA and Narrator name the group
+   as focus enters it. Shift+period (>) and Shift+comma (<) do nothing.
+3. Check period and comma still type in text fields (preset name, tone
+   search) and do nothing inside open menus, advanced decks or dialogs.
+4. Open Settings from the account menu with the keyboard. Focus lands on
+   Close settings; closing it (or pressing Escape) returns focus to the
+   account button.
+
+## What the automated speech checks cover
+
+The Speech, Accessibility settings and Toggle clicks suites in
+`SelfTests.cpp` walk every Tab stop on the main, tone editor, EQ, Info,
+tuner, browser and both Settings screens and build the line a screen reader
+would speak (name, role, value, state, description). They fail on a missing
+name, a name over six words (tone titles excluded), a name that repeats its
+role, text that reads as code, a value over 40 characters or with more than
+two decimals, and status messages over 20 words. Run them alone and print
+every line with:
+
+```powershell
+$env:T3K_UI_TEST_FILTER = "Speech"; $env:T3K_SPEECH_TRANSCRIPT = "1"
+build/plugin/ui/testbed/UiTestbed_artefacts/Release/UiTestbed.exe --selftest
+```
+
+They do not hear NVDA, Narrator or VoiceOver; listen to a few screens after
+changing names or hint copy.

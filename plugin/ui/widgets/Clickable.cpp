@@ -32,7 +32,19 @@ public:
         button_(button) {}
 
   juce::String getTitle() const override { return button_.accessibleName(); }
-  juce::String getHelp() const override { return button_.getHelpText(); }
+  juce::String getHelp() const override {
+    const auto hint = button_.getHelpText();
+    // A title that stands in for the hint's short lead ("Solo left" for
+    // "Solo L: ..."): the lead is the same name, so it is not spoken again.
+    // The hint bar keeps the whole hint.
+    const auto hintLead = help::lead(hint);
+    const bool titled = button_.getTitle().isNotEmpty() && hint.startsWith(hintLead + ":");
+    auto text = help::spokenHelp(titled ? hintLead : button_.accessibleName(), hint);
+    const auto keys = button_.spokenKeys();
+    if (keys.isEmpty()) return text;
+    if (text.isNotEmpty() && !text.endsWithChar('.')) text << ".";
+    return (text + " " + keys).trim();
+  }
   juce::AccessibleState getCurrentState() const override {
     auto state = juce::AccessibilityHandler::getCurrentState();
     if (!button_.isToggleable()) return state;
@@ -47,7 +59,7 @@ private:
 
 Clickable::Clickable(const juce::String& text) : juce::Button(text) {
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(true);
+  setMouseClickGrabsKeyboardFocus(false);
 }
 
 juce::String Clickable::accessibleName() const {

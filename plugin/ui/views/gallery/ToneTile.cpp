@@ -86,6 +86,13 @@ void ToneTile::syncState() {
   repaint();
 }
 
+// The same words ChainView's description uses, so the two never repeat.
+juce::String ToneTile::accessibleStatus() const {
+  if (block_.loadFailed) return "load failed";
+  if (block_.modelLoading || !block_.loaded) return "loading";
+  return {};
+}
+
 void ToneTile::togglePower() {
   enabled_ = !enabled_;
   power_.setOn(enabled_);

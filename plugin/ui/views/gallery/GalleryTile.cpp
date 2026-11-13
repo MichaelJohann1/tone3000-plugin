@@ -15,8 +15,8 @@ GalleryTile::GalleryTile(Services& services, std::string blockId, int size)
   // Sortable tiles are focusable (keyboard sorting) but draw no focus ring,
   // as the web didn't.
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(true);
-  setDescription("Enter: open. Space: reorder. Shift+F10: menu, including Load File and Load Folder.");
+  setMouseClickGrabsKeyboardFocus(false);
+  setDescription("Enter opens, Space moves, Shift+F10 for more.");
 }
 
 GalleryTile::~GalleryTile() {
@@ -179,7 +179,26 @@ bool GalleryTile::keyPressed(const juce::KeyPress& key) {
 }
 
 std::unique_ptr<juce::AccessibilityHandler> GalleryTile::createAccessibilityHandler() {
-  return std::make_unique<juce::AccessibilityHandler>(
+  // The hint (title, then mouse gestures) stays in the hint bar; a screen
+  // reader has the title as the name and the keys in the description.
+  struct Handler : juce::AccessibilityHandler {
+    Handler(GalleryTile& tile, juce::AccessibilityRole role, juce::AccessibilityActions actions)
+        : juce::AccessibilityHandler(tile, role, std::move(actions)), tile_(tile) {}
+    juce::String getHelp() const override { return {}; }
+    // The load state rides on the description, so it is there on every
+    // visit, not only in the one-time announcement.
+    juce::String getDescription() const override {
+      const auto description = tile_.getDescription();
+      const auto status = tile_.accessibleStatus();
+      if (status.isEmpty() || description.containsIgnoreCase(status)) return description;
+      const auto lead = status.substring(0, 1).toUpperCase() + status.substring(1);
+      return description.isEmpty() ? lead : lead + ". " + description;
+    }
+
+  private:
+    GalleryTile& tile_;
+  };
+  return std::make_unique<Handler>(
       *this, juce::AccessibilityRole::button,
       juce::AccessibilityActions()
           .addAction(juce::AccessibilityActionType::press, [this] { open(); })

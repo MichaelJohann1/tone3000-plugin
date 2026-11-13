@@ -106,7 +106,11 @@ public:
   void paint(juce::Graphics& g) override;
   void resized() override;
   void parentHierarchyChanged() override;
-  // Escape drops a focused control's focus (a text field takes its own Escape).
+  // Escape closes the screen in front (Settings, the tuner, the sign-in
+  // screen, the tone browser, a block's card) by its own Back / Close path
+  // and hands focus back to what opened it; with none open it drops a
+  // focused control's focus. A text field, a popover and a dialog take
+  // their own Escape first.
   bool keyPressed(const juce::KeyPress& key) override;
   std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override;
 
@@ -117,7 +121,7 @@ private:
   void bannerChanged() override;
   void connectionProblemChanged() override;
   void updateNoticeChanged() override;
-  void sessionChanged() override {}
+  void sessionChanged() override;
   void authFlowChanged() override;
   void componentMovedOrResized(juce::Component& parent, bool moved, bool resized) override;
   // Modals stack in the overlay layer (Plugin.tsx z-order): update notice,
@@ -153,12 +157,26 @@ private:
   // keys go with nothing focused; none under a modal or on a screen that
   // does not scroll.
   DragScroller* frontScroller();
-  // < and > move between groups of controls (widgets/AccessibleGroup.h) on
+  // Period and comma move between groups of controls (widgets/AccessibleGroup.h) on
   // the screen in front. Not in a text field, a menu or under a dialog, and
   // not when Plugin Settings has them off: printable keys belong to the
   // host otherwise (WCAG 2.1.4).
   bool handleGroupKey(const juce::KeyPress& key);
+  // Escape's close: the screen in front, by its Back / Close path. False
+  // when none is open.
+  bool closeFrontScreen();
+  // The banner's copy as its description and its buttons', so it can be
+  // read again after the one-time announcement.
+  void describeBanner(const BannerSpec& spec);
+  // `opener` if it can take focus, else the first control in `fallback`.
+  static void focusOpenerOr(juce::Component* opener, juce::Component* fallback);
 
+  // What had keyboard focus when Settings opened, to hand it back on close.
+  juce::Component::SafePointer<juce::Component> settingsOpener_;
+  // The same for the tone browser and the sign-in screen.
+  juce::Component::SafePointer<juce::Component> browserOpener_, signInOpener_;
+  // A sign-in started here and not yet announced as landed.
+  bool announceSignIn_ = false;
   Services& services_;
   PluginHeader header_;
   HintBar hintBar_;

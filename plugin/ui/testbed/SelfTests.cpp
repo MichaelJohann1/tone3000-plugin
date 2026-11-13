@@ -71,6 +71,9 @@
 #include "widgets/Knob.h"
 #include "widgets/form/FormControls.h"
 #include "widgets/form/SelectField.h"
+#include "widgets/form/FormRows.h"
+#include "widgets/ModelSelect.h"
+#include "views/block/BlockEqView.h"
 #include "widgets/Popover.h"
 #include "widgets/QrCode.h"
 #include "widgets/SegmentedText.h"
@@ -984,7 +987,7 @@ struct ToneModelTests : juce::UnitTest {
     expectEquals(factory.description, juce::String("Original Mesa creator text"));
     expect(toneOverview(factory).contains("preamp only"));
 
-    beginTest("Info exposes focusable overview and reveals original copy on demand");
+    beginTest("Info reads the original description to a screen reader; layout is upstream's");
     BlockInfoPanel panel;
     BlockInfoPanel::State info;
     info.authenticated = true;
@@ -992,32 +995,26 @@ struct ToneModelTests : juce::UnitTest {
     info.pageUrl = "https://www.tone3000.com/tones/999";
     panel.setState(info);
     panel.setSize(500, panel.heightFor(500));
-    juce::Button* moreInfo = nullptr;
-    int visibleText = 0;
+    int readouts = 0;
     for (auto* child : panel.getChildren()) {
-      if (auto* text = dynamic_cast<Paragraph*>(child); text && text->isVisible()) {
-        ++visibleText;
-        expect(text->getWantsKeyboardFocus());
-        expect(text->createAccessibilityHandler()->getTitle().contains("Includes:"));
+      expect(dynamic_cast<Paragraph*>(child) == nullptr, "no overview paragraph (upstream layout)");
+      if (auto* button = dynamic_cast<juce::Button*>(child))
+        expect(button->getButtonText() != "More info", "no More info button (upstream layout)");
+      auto handler = child->createAccessibilityHandler();
+      if (child->isVisible() && handler && handler->getRole() == juce::AccessibilityRole::staticText &&
+          handler->getTitle() == "Description") {
+        ++readouts;
+        // The whole creator text, as content (description), not a value.
+        expect(handler->getDescription().contains("newsletter"));
+        expect(handler->getValueInterface() == nullptr);
+        expect(child->getWantsKeyboardFocus());
+        expect(!child->getMouseClickGrabsKeyboardFocus());
+        bool self = true, children = true;
+        child->getInterceptsMouseClicks(self, children);
+        expect(!self && !children, "the readout lets the mouse through");
       }
-      if (auto* button = dynamic_cast<juce::Button*>(child);
-          button && button->getButtonText() == "More info") moreInfo = button;
     }
-    expectEquals(visibleText, 1);
-    expect(moreInfo != nullptr);
-    if (moreInfo) {
-      moreInfo->onClick();
-      panel.setSize(500, panel.heightFor(500));
-      expect(moreInfo->getToggleState());
-      int readableOriginal = 0;
-      for (auto* child : panel.getChildren())
-        if (auto* text = dynamic_cast<Paragraph*>(child); text && text->isVisible() &&
-            text->createAccessibilityHandler()->getTitle().contains("newsletter")) ++readableOriginal;
-      expectEquals(readableOriginal, 1);
-      moreInfo->onClick();
-      panel.setSize(500, panel.heightFor(500));
-      expect(!moreInfo->getToggleState());
-    }
+    expectEquals(readouts, 1);
 
     beginTest("withModels patches the parsed list and the raw JSON alike");
     const auto tone = Tone::parse(juce::JSON::parse(
@@ -1209,16 +1206,21 @@ struct AccessibilityTests : juce::UnitTest {
     expectEquals(help::lead(juce::String()), juce::String());
     expectEquals(help::lead(": odd"), juce::String(": odd"));
 
-    beginTest("buttons take focus from Tab and clicks");
+    beginTest("buttons take focus from Tab, not from clicks (upstream)");
     IconButton icon(Icon::X);
     expect(icon.getWantsKeyboardFocus());
-    expect(icon.getMouseClickGrabsKeyboardFocus());
+    expect(!icon.getMouseClickGrabsKeyboardFocus());
 
     beginTest("a button's name: title, else text, else the hint lead");
     icon.setHelpText(help::text(help::Key::undo));
     expectEquals(icon.accessibleName(), help::lead(help::text(help::Key::undo)));
     expectEquals(icon.createAccessibilityHandler()->getTitle(), icon.accessibleName());
-    expectEquals(icon.createAccessibilityHandler()->getHelp(), help::text(help::Key::undo));
+    // The hint bar shows the whole hint; a screen reader gets it without the
+    // name it opens with, having just read the name.
+    expectEquals(icon.getHelpText(), help::text(help::Key::undo));
+    expectEquals(icon.createAccessibilityHandler()->getHelp(),
+                 help::spokenHelp(icon.accessibleName(), help::text(help::Key::undo)));
+    expect(!icon.createAccessibilityHandler()->getHelp().startsWith(icon.accessibleName()));
     ChromeTextButton save("Save", help::Key::presetSave);
     expectEquals(save.accessibleName(), juce::String("Save"));
     save.setTitle("Save preset");
@@ -1244,7 +1246,7 @@ struct AccessibilityTests : juce::UnitTest {
     options.help = help::Key::inputLevel;
     Knob knob(options);
     expect(knob.getWantsKeyboardFocus());
-    expect(knob.getMouseClickGrabsKeyboardFocus());
+    expect(!knob.getMouseClickGrabsKeyboardFocus());  // a click never focuses (upstream)
     expectEquals(knob.getTitle(), juce::String("Input"));
     knob.setValue(0.5f);
     std::vector<float> emitted;
@@ -1410,7 +1412,7 @@ struct FocusPolicyTests : juce::UnitTest {
     expect(!key(*peer, juce::KeyPress::spaceKey));  // and with nothing focused
     key(*peer, juce::KeyPress::escapeKey);
 
-    beginTest("clicking and changing a knob retains plugin focus; menus restore their button");
+    beginTest("a click never focuses a knob (upstream); keyboard focus keeps it; mouse menus do not focus their button");
     auto* knob = dynamic_cast<Knob*>(drive::find(root, [](juce::Component& c) {
       return dynamic_cast<Knob*>(&c) != nullptr && c.isShowing() && c.isEnabled();
     }));
@@ -1420,16 +1422,25 @@ struct FocusPolicyTests : juce::UnitTest {
     expect(key(*peer, juce::KeyPress::tabKey));
     expect(focused() != nullptr);
     click(*peer, *knob);
+    expect(focused() != knob, "a click does not focus the knob");
+    knob->grabKeyboardFocus();  // as Tab would
     expect(focused() == knob);
     expect(key(*peer, juce::KeyPress::rightKey));
     expect(focused() == knob);
     knob->getAccessibilityHandler()->getValueInterface()->setValue(0.0);
     expect(focused() == knob, "Screen-reader value changes keep the slider focused");
-    click(*peer, *inputMode);  // opens its menu: the panel takes focus
-    expect(focused() != inputMode);
+    click(*peer, *inputMode);  // opens its menu from the mouse
+    pump(30);
+    expect(focused() != inputMode, "a click does not focus the menu button");
     key(*peer, juce::KeyPress::escapeKey);
     pump(30);
-    expect(focused() == inputMode);
+    expect(focused() != inputMode, "a mouse-opened menu does not hand focus to its button");
+    if (auto* open = drive::find(root, [](juce::Component& c) {
+          auto* p = dynamic_cast<Popover*>(&c);
+          return p != nullptr && p->isOpen();
+        }))
+      dynamic_cast<Popover*>(open)->dismiss();
+    pump(30);
 
     beginTest("a keyboard-opened menu: arrows walk the rows, Escape returns to the anchor");
     inputMode->grabKeyboardFocus();
@@ -1658,8 +1669,8 @@ BranchAccessibilityTests branchAccessibilityTests;
 struct GroupNavigationTests : juce::UnitTest {
   GroupNavigationTests() : juce::UnitTest("Group navigation", "ui") {}
 
-  static bool press(LiveScenario& live, juce::juce_wchar c) {
-    return live.peer->handleKeyPress(juce::KeyPress(c, juce::ModifierKeys::shiftModifier, c));
+  static bool press(LiveScenario& live, juce::juce_wchar c, juce::ModifierKeys mods = {}) {
+    return live.peer->handleKeyPress(juce::KeyPress(c, mods, c));
   }
   static juce::String groupOfFocus(PluginRoot& root) {
     auto* group = a11y::enclosingGroup(LiveScenario::focused(), &root);
@@ -1698,13 +1709,13 @@ struct GroupNavigationTests : juce::UnitTest {
     auto* bass = drive::find(root, [](juce::Component& c) { return c.getTitle() == "Bass" && c.isShowing(); });
     expect(bass != nullptr && indexOf(input) < indexOf(bass) && indexOf(bass) < indexOf(output));
 
-    beginTest("> and < walk the groups and wrap");
+    beginTest(". and , walk the groups and wrap");
     expect(LiveScenario::focused() == nullptr);
-    expect(press(live, '>'));
+    expect(press(live, '.'));
     expectEquals(groupOfFocus(root), juce::String("Presets"));
     juce::StringArray visited{groupOfFocus(root)};
     for (int i = 0; i < 20; ++i) {
-      expect(press(live, '>'));
+      expect(press(live, '.'));
       if (groupOfFocus(root) == "Presets") break;
       visited.add(groupOfFocus(root));
     }
@@ -1713,17 +1724,19 @@ struct GroupNavigationTests : juce::UnitTest {
     expect(visited.indexOf("Toolbar") < visited.indexOf("Input"));
     expect(visited.indexOf("Input") < visited.indexOf("Output"));
     expectEquals(groupOfFocus(root), juce::String("Presets"), "wraps to the first group");
-    expect(press(live, '<'));
-    expectEquals(groupOfFocus(root), juce::String("Output"), "< from the first group wraps to the last");
-    expect(press(live, '<'));
+    expect(press(live, ','));
+    expectEquals(groupOfFocus(root), juce::String("Output"), ", from the first group wraps to the last");
+    expect(press(live, ','));
     expectEquals(groupOfFocus(root), visited[visited.size() - 2]);
 
-    beginTest("the keys can be turned off");
-    root.services().prefs.setBool(UiPrefs::kGroupNavigationKeys, false);
-    auto* before = LiveScenario::focused();
-    expect(!press(live, '>'));
-    expect(LiveScenario::focused() == before);
-    root.services().prefs.setBool(UiPrefs::kGroupNavigationKeys, true);
+    beginTest("Shift and Ctrl leave the keys to the host");
+    {
+      auto* at = LiveScenario::focused();
+      expect(!press(live, '>', juce::ModifierKeys::shiftModifier));
+      expect(!press(live, '<', juce::ModifierKeys::shiftModifier));
+      expect(!press(live, '.', juce::ModifierKeys::ctrlModifier));
+      expect(LiveScenario::focused() == at);
+    }
     live.key(juce::KeyPress::escapeKey);
   }
 };
@@ -1812,9 +1825,11 @@ struct BrowserAccessibilityTests : juce::UnitTest {
     }));
     expect(chip != nullptr);
     if (chip == nullptr) return;
-    expect(chip->getHelpText().contains("without a speaker cabinet"));
-    expect(chip->getHelpText().contains("choose a tone"));
+    // The hint bar shows upstream's copy; the gear's definition is the
+    // chip's spoken description.
+    expectEquals(chip->getHelpText(), help::text(help::Key::browserGear));
     auto* handler = chip->getAccessibilityHandler();
+    expect(handler->getDescription().contains("without a speaker cabinet"));
     expect(handler->getActions().invoke(juce::AccessibilityActionType::press));
     LiveScenario::pump(100);
     expectEquals(live.root().services().browser.query.gear, juce::String("amp"));
@@ -1925,60 +1940,28 @@ struct BrowseInfoTests : juce::UnitTest {
     }));
     expect(card != nullptr);
     if (!card) return;
+    // The hint bar shows nothing for a card, as upstream; a screen reader
+    // gets the creator's description as the card's description.
+    expect(card->getHelpText().isEmpty(), "a card has no hint-bar text");
     if (card->tone().description.trim().isNotEmpty())
-      expect(card->getHelpText().startsWith(card->tone().description.trim()), "Results retain the original creator description");
+      expect(card->createAccessibilityHandler()->getDescription().contains(card->tone().description.trim()),
+             "Results retain the original creator description");
     int picks = 0;
     juce::String openedUrl;
     card->onClick = [&] { ++picks; };
     card->onOpenUrl = [&](const juce::String& url) { openedUrl = url; };
     LiveScenario::focus(*card);
-    beginTest("Applications key opens inspection actions without selecting a tone");
+    beginTest("Applications key opens Open on web without selecting a tone; no More info");
     expect(live.key(kWindowsApplicationsKey));
-    auto* more = drive::buttonNamed(live.root(), "More info");
     auto* web = drive::buttonNamed(live.root(), "Open on web");
-    expect(more != nullptr && web != nullptr);
+    expect(web != nullptr);
+    expect(drive::buttonNamed(live.root(), "More info") == nullptr, "the card menu has no More info row");
     expectEquals(picks, 0);
-    if (!more || !web) return;
-    const auto qaDir = juce::SystemStats::getEnvironmentVariable("T3K_UI_QA_DIRECTORY", "");
-    const auto capture = [&](const juce::String& captureName) {
-      if (qaDir.isEmpty()) return;
-      const juce::File directory(qaDir);
-      directory.createDirectory();
-      auto stream = directory.getChildFile(captureName + ".png").createOutputStream();
-      if (stream) juce::PNGImageFormat().writeImageToStream(
-          live.root().createComponentSnapshot(live.root().getLocalBounds(), true, 2.0f), *stream);
-    };
-    capture("browser-context-menu");
-    more->onClick();
-    LiveScenario::pump(50);
-    beginTest("More info displays the overview without loading and Escape returns focus");
-    auto* panel = dynamic_cast<BlockInfoPanel*>(drive::find(live.root(), [](juce::Component& component) {
-      return dynamic_cast<BlockInfoPanel*>(&component) != nullptr && component.isShowing();
-    }));
-    expect(panel != nullptr);
-    expectEquals(picks, 0);
-    if (!panel) return;
-    auto* popup = panel->findParentComponentOfClass<Popover>();
-    expect(popup != nullptr);
-    if (!popup) return;
-    capture("browser-info-overview");
-    auto* expand = dynamic_cast<juce::Button*>(drive::find(*popup, [](juce::Component& component) {
-      auto* button = dynamic_cast<juce::Button*>(&component);
-      return button && button->getButtonText() == "More info";
-    }));
-    expect(expand != nullptr);
-    if (expand) {
-      expand->onClick();
-      LiveScenario::pump(50);
-      auto* original = drive::find(*popup, [](juce::Component& component) {
-        auto* paragraph = dynamic_cast<Paragraph*>(&component);
-        return paragraph && paragraph->plainText().contains("2002 Vox");
-      });
-      expect(original != nullptr);
-      if (original) LiveScenario::focus(*original);
-      capture("browser-info-expanded");
-    }
-    expect(popup->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
+    if (!web) return;
+    beginTest("Escape closes the card menu and returns focus to the card");
+    auto* menu = web->findParentComponentOfClass<Popover>();
+    expect(menu != nullptr);
+    if (menu) expect(menu->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
     expect(LiveScenario::until([&] { return card->hasKeyboardFocus(false); }));
     expectEquals(picks, 0);
     beginTest("Shift F10 is routed through the window to the browsing card");
@@ -1986,23 +1969,40 @@ struct BrowseInfoTests : juce::UnitTest {
     auto* keyboardMenuRow = drive::buttonNamed(live.root(), "Open on web");
     expect(keyboardMenuRow != nullptr);
     if (keyboardMenuRow) {
-      auto* keyboardMenu = keyboardMenuRow->findParentComponentOfClass<Popover>();
-      expect(keyboardMenu != nullptr);
-      if (keyboardMenu) keyboardMenu->dismiss();
+      keyboardMenuRow->onClick();
+      expectEquals(openedUrl, card->tone().url.isNotEmpty() ? card->tone().url :
+          "https://www.tone3000.com/tones/" + juce::String(card->tone().id));
+      if (auto* keyboardMenu = keyboardMenuRow->findParentComponentOfClass<Popover>()) keyboardMenu->dismiss();
     }
     expect(LiveScenario::until([&] { return card->hasKeyboardFocus(false); }));
-    beginTest("unloadable cards retain screen-reader inspection without activation");
+    expectEquals(picks, 0);
+    beginTest("a right-click on a card opens no menu (upstream)");
+    live.root().unfocusAllComponents();
+    LiveScenario::pump(30);
+    {
+      // Through the peer, as the OS delivers it: a right press and release.
+      const auto pos = live.centre(*card);
+      auto t = juce::Time::currentTimeMillis();
+      using Type = juce::MouseInputSource::InputSourceType;
+      live.peer->handleMouseEvent(Type::mouse, pos, juce::ModifierKeys(), 0.0f, 0.0f, ++t, {}, 0);
+      live.peer->handleMouseEvent(Type::mouse, pos, juce::ModifierKeys::rightButtonModifier, 0.0f, 0.0f, ++t, {}, 0);
+      LiveScenario::pump(20);
+      live.peer->handleMouseEvent(Type::mouse, pos, juce::ModifierKeys(), 0.0f, 0.0f, ++t, {}, 0);
+      LiveScenario::pump(50);
+    }
+    expect(drive::buttonNamed(live.root(), "Open on web") == nullptr);
+    expect(!card->hasKeyboardFocus(false), "a click does not focus the card");
+    picks = 0;  // a right press clicks a JUCE button, as upstream
+    beginTest("unloadable cards are disabled and say why to a screen reader");
     card->setDisabled(true);
+    expect(!card->isEnabled());
     auto handler = card->createAccessibilityHandler();
+    expect(handler->getDescription().startsWith("Unavailable in the plugin."));
     handler->getActions().invoke(juce::AccessibilityActionType::press);
+    handler->getActions().invoke(juce::AccessibilityActionType::showMenu);
     LiveScenario::pump(30);
     expectEquals(picks, 0);
-    expect(handler->getActions().invoke(juce::AccessibilityActionType::showMenu));
-    expect(drive::buttonNamed(live.root(), "Open on web") != nullptr);
-    if (auto* openWeb = drive::buttonNamed(live.root(), "Open on web")) openWeb->onClick();
-    expectEquals(openedUrl, card->tone().url.isNotEmpty() ? card->tone().url :
-        "https://www.tone3000.com/tones/" + juce::String(card->tone().id));
-    expectEquals(picks, 0);
+    expect(drive::buttonNamed(live.root(), "Open on web") == nullptr);
   }
 };
 BrowseInfoTests browseInfoTests;
@@ -2290,7 +2290,8 @@ struct AudioSettingsAccessibilityTests : juce::UnitTest {
     expect(handler->getActions().contains(juce::AccessibilityActionType::showMenu));
     expect(device.getWantsKeyboardFocus());
     device.setDisabled(true);
-    expect(!device.isEnabled());
+    // Dimmed and inert, as upstream (the component stays enabled so the
+    // mouse behaves as before); it leaves the Tab order.
     expect(!device.getWantsKeyboardFocus());
     expect(!device.keyPressed(KP(KP::returnKey)));
     handler->getActions().invoke(juce::AccessibilityActionType::showMenu);
@@ -2419,7 +2420,9 @@ struct SettingsKeyboardTests : juce::UnitTest {
     }
     expect(wrapped, "the cycle came back to its first stop without leaving the page");
     expect(stops > 3 && followed, "the walk reached controls below the fold and the page followed");
-    live.key(KP::escapeKey);
+    // Clear focus without Escape (Escape now closes Settings).
+    juce::Component::unfocusAllComponents();
+    live.pump(30);
     expect(live.focused() == nullptr);
 
     beginTest("a focused control passes the page's keys up to the page");
@@ -2430,7 +2433,8 @@ struct SettingsKeyboardTests : juce::UnitTest {
     expect(live.key(KP::downKey));
     expectEquals(view.getViewPositionY(), DragScroller::kKeyLineStep);
     expect(!live.key(KP::spaceKey));  // and Space still falls through to the host
-    live.key(KP::escapeKey);
+    juce::Component::unfocusAllComponents();
+    live.pump(30);
     expect(live.focused() == nullptr);
   }
 };
@@ -3950,6 +3954,800 @@ ToneModelTests toneModelTests;
 ToneQueryTests toneQueryTests;
 ReadoutTests readoutTests;
 
+// ---------------------------------------------------------------------------
+// What a screen reader says. Each Tab stop is read the way NVDA and
+// VoiceOver read it by default: name, role, value, state, then the help
+// text. The rules below catch speech that is missing, garbled or wordy; they
+// cannot judge the voice itself (accessibility.md covers the manual pass).
+
+// Every help::announce() of the run (installed by runSelfTests before any
+// suite starts), for the speech checks.
+juce::StringArray& announcementLog() {
+  static juce::StringArray log;
+  return log;
+}
+
+namespace speech {
+
+// Longest name a control should have (tone and preset titles excepted: they
+// are the user's content, read in full), and the longest status message.
+constexpr int kMaxNameWords = 6;
+constexpr int kMaxAnnouncementWords = 20;
+constexpr int kMaxValueChars = 40;
+// Settings toggles read the line under the switch, which can run long;
+// that copy is the app's own and stays as it is. Elsewhere, 20 words.
+constexpr int kMaxDescriptionWords = 20;
+
+juce::String roleWords(juce::AccessibilityRole role) {
+  using R = juce::AccessibilityRole;
+  switch (role) {
+    case R::button: return "button";
+    case R::toggleButton: return "toggle button";
+    case R::radioButton: return "radio button";
+    case R::comboBox: return "combo box";
+    case R::slider: return "slider";
+    case R::editableText: return "edit";
+    case R::group: return "grouping";
+    case R::list: return "list";
+    case R::listItem: return "list item";
+    case R::menuItem: return "menu item";
+    case R::hyperlink: return "link";
+    case R::progressBar: return "progress bar";
+    default: return {};
+  }
+}
+
+int wordCount(const juce::String& text) { return juce::StringArray::fromTokens(text, " \t\n", "").size(); }
+
+// Text meant for developers, not listeners: identifiers, placeholders and
+// numbers that failed to format.
+bool soundsLikeCode(const juce::String& text) {
+  if (text.containsChar('_') || text.containsChar('{') || text.containsChar('}')) return true;
+  if (text.containsIgnoreCase("t3k.") || text.contains("%s") || text.contains("%d")) return true;
+  for (auto word : juce::StringArray::fromTokens(text, " ,.:;()/", "")) {
+    if (word == "nan" || word == "NaN" || word == "inf" || word == "null" || word == "undefined") return true;
+    // camelCase inside a lower-case word ("osFactor"); "iPad", "McIntosh"
+    // and all-caps words like "TONE3000" pass.
+    for (int i = 2; i + 1 < word.length(); ++i)
+      if (juce::CharacterFunctions::isLowerCase(word[0]) && juce::CharacterFunctions::isLowerCase(word[i - 1]) &&
+          juce::CharacterFunctions::isUpperCase(word[i]) && juce::CharacterFunctions::isLowerCase(word[i + 1]))
+        return true;
+  }
+  return false;
+}
+
+// "Input Input" or "the the": a doubled word reads as a stutter.
+bool repeatsWord(const juce::String& text) {
+  const auto words = juce::StringArray::fromTokens(text.toLowerCase(), " ,.:;", "");
+  for (int i = 1; i < words.size(); ++i)
+    if (words[i] == words[i - 1] && words[i].containsOnly("abcdefghijklmnopqrstuvwxyz")) return true;
+  return false;
+}
+
+// More than two decimal places reads as noise ("minus six point zero four
+// one seven decibels").
+bool overlyPrecise(const juce::String& value) {
+  for (int i = 1; i < value.length(); ++i) {
+    if (value[i] != '.' || !juce::CharacterFunctions::isDigit(value[i - 1])) continue;
+    int digits = 0;
+    for (int j = i + 1; j < value.length() && juce::CharacterFunctions::isDigit(value[j]); ++j) ++digits;
+    if (digits > 2) return true;
+  }
+  return false;
+}
+
+struct Stop {
+  juce::Component* component = nullptr;
+  juce::String name, role, value, state, help, description;
+  bool content = false;  // names the user's content (a tone or preset title)
+  // The name with any tone title in it taken out: what the word limit
+  // applies to ("Branch after <title>" is two words of ours).
+  juce::String ownWords;
+  // The description is copy printed beside the control (a settings
+  // switch's line): reading it out matches the screen.
+  bool descriptionOnScreen = false;
+
+  juce::String line() const {
+    juce::StringArray parts;
+    for (const auto& p : {name, role, value, state})
+      if (p.isNotEmpty()) parts.add(p);
+    return parts.joinIntoString(", ");
+  }
+  // Help that opens by repeating the name ("Undo: step back" after "Undo").
+  bool helpRepeatsName() const {
+    return name.isNotEmpty() && (help.equalsIgnoreCase(name) || help.startsWithIgnoreCase(name + ":") ||
+                                 help.startsWithIgnoreCase(name + "."));
+  }
+};
+
+Stop describe(juce::Component& c) {
+  Stop s;
+  s.component = &c;
+  auto* h = c.getAccessibilityHandler();
+  if (h == nullptr) return s;
+  s.name = h->getTitle().trim();
+  s.role = roleWords(h->getRole());
+  if (auto* v = h->getValueInterface()) s.value = v->getCurrentValueAsString().trim();
+  const auto state = h->getCurrentState();
+  if (state.isCheckable()) s.state = state.isChecked() ? "checked" : "not checked";
+  else if (state.isExpandable()) s.state = state.isExpanded() ? "expanded" : "collapsed";
+  s.help = h->getHelp().trim();
+  s.description = h->getDescription().trim();
+  s.ownWords = s.name;
+  for (auto* p = &c; p != nullptr && !s.content; p = p->getParentComponent())
+    s.content = dynamic_cast<ToneCard*>(p) != nullptr || dynamic_cast<GalleryTile*>(p) != nullptr;
+  // Readable paragraphs and list rows (presets, menu rows) carry text the
+  // user or a creator wrote; it is read in full.
+  const auto role = h->getRole();
+  if (role == juce::AccessibilityRole::staticText || role == juce::AccessibilityRole::listItem) s.content = true;
+  s.descriptionOnScreen = dynamic_cast<PillToggle*>(&c) != nullptr;
+  return s;
+}
+
+// What is wrong with one stop's speech; empty when it reads well.
+juce::StringArray problems(const Stop& s) {
+  juce::StringArray out;
+  if (s.name.isEmpty()) out.add("has no name");
+  if (!s.content && wordCount(s.ownWords) > kMaxNameWords)
+    out.add("name is over " + juce::String(kMaxNameWords) + " words");
+  if (s.role.isNotEmpty() && s.name.endsWithIgnoreCase(" " + s.role.fromLastOccurrenceOf(" ", false, false)))
+    out.add("name repeats its role (" + s.role + ")");
+  if (soundsLikeCode(s.name) || soundsLikeCode(s.value)) out.add("reads as code");
+  if (repeatsWord(s.name)) out.add("name repeats a word");
+  if (s.value.length() > kMaxValueChars) out.add("value is over " + juce::String(kMaxValueChars) + " characters");
+  if (overlyPrecise(s.value)) out.add("value has more than two decimals");
+  // Hint copy leads with the control's name; a reader that speaks help on
+  // focus (NVDA does) would say the name twice.
+  if (s.helpRepeatsName()) out.add("help repeats the name: " + s.help.substring(0, 50));
+  // Read on every visit, so it stays short.
+  if (wordCount(s.description) > kMaxDescriptionWords && !s.content && !s.descriptionOnScreen)
+    out.add("description is over " + juce::String(kMaxDescriptionWords) + " words");
+  return out;
+}
+
+// The Tab walk of whatever is in front, as the keyboard sees it: from
+// nothing focused, Tab until the walk wraps or leaves the UI.
+std::vector<Stop> tabWalk(LiveScenario& live) {
+  std::vector<Stop> stops;
+  live.key(juce::KeyPress::escapeKey);
+  juce::Component* first = nullptr;
+  for (int i = 0; i < 400; ++i) {
+    if (!live.key(juce::KeyPress::tabKey)) break;
+    LiveScenario::pump(10);
+    auto* f = LiveScenario::focused();
+    if (f == nullptr || f == first) break;
+    if (first == nullptr) first = f;
+    stops.push_back(describe(*f));
+  }
+  live.key(juce::KeyPress::escapeKey);
+  // Tone titles on screen are the user's content wherever they appear.
+  juce::StringArray titles;
+  std::function<void(juce::Component&)> visit = [&](juce::Component& c) {
+    if (auto* tile = dynamic_cast<GalleryTile*>(&c); tile != nullptr && tile->getTitle().isNotEmpty())
+      titles.addIfNotAlreadyThere(tile->getTitle());
+    for (auto* child : c.getChildren()) visit(*child);
+  };
+  visit(live.root());
+  for (auto& stop : stops)
+    for (const auto& title : titles) stop.ownWords = stop.ownWords.replace(title, "").trim();
+  return stops;
+}
+
+juce::Component* titled(juce::Component& root, const juce::String& title) {
+  return drive::find(root, [&](juce::Component& c) {
+    auto* h = c.getAccessibilityHandler();
+    return c.isShowing() && !a11y::isGroup(c) && h != nullptr && h->getTitle() == title;
+  });
+}
+
+}  // namespace speech
+
+struct SpeechTests : juce::UnitTest {
+  SpeechTests() : juce::UnitTest("Speech", "ui") {}
+
+  // One screen, opened the way its scenario opens it, then `open`.
+  void auditScreen(const juce::String& scenarioId, const std::function<void(LiveScenario&)>& open = {}) {
+    beginTest("every Tab stop reads clearly: " + scenarioId);
+    LiveScenario live(*this, scenarioId);
+    if (!live.ok) return;
+    live.drive();
+    if (open) open(live);
+    LiveScenario::pump(100);
+    const auto stops = speech::tabWalk(live);
+    expect(!stops.empty(), scenarioId + ": Tab reached no control");
+    for (const auto& stop : stops) {
+      const auto issues = speech::problems(stop);
+      expect(issues.isEmpty(), scenarioId + ": \"" + stop.line() + "\" " + issues.joinIntoString("; "));
+    }
+    // T3K_SPEECH_TRANSCRIPT=1 prints every stop, for reading by ear.
+    if (juce::SystemStats::getEnvironmentVariable("T3K_SPEECH_TRANSCRIPT", "").isNotEmpty())
+      for (const auto& stop : stops)
+        logMessage("  " + stop.line() + (stop.description.isNotEmpty() ? ". " + stop.description : juce::String()) +
+                   (stop.help.isNotEmpty() ? "  |  " + stop.help : juce::String()));
+  }
+
+  void runTest() override {
+    auditScreen("main-stereo");
+    auditScreen("main-mono");
+    auditScreen("main-detail");
+    auditScreen("main-detail-eq-sliders");
+    auditScreen("main-detail-info");
+    auditScreen("main-tuner-idle");
+    auditScreen("browser-search");
+    auditScreen("browser-signed-out");
+    auditScreen("settings-plugin");  // its drive opens Settings from the account menu
+    auditScreen("settings-system", [](LiveScenario& live) { live.root().openSettings(SettingsScreen::Tab::system); });
+
+    beginTest("group names are short and do not say group");
+    {
+      LiveScenario live(*this, "main-stereo");
+      if (live.ok) {
+        live.root().openSettings(SettingsScreen::Tab::plugin);
+        LiveScenario::pump(200);
+        std::function<void(juce::Component&)> visit = [&](juce::Component& c) {
+          if (a11y::isGroup(c) && c.isShowing()) {
+            const auto title = c.getTitle();
+            expect(title.isNotEmpty(), "a group has no name");
+            expect(speech::wordCount(title) <= 3, "group name too long: " + title);
+            expect(!title.containsIgnoreCase("group"), "the reader already says grouping: " + title);
+          }
+          for (auto* child : c.getChildren()) visit(*child);
+        };
+        visit(live.root());
+        live.root().closeSettings();
+      }
+    }
+
+    beginTest("choosing Mono or Stereo is spoken");
+    {
+      LiveScenario live(*this, "main-stereo");
+      if (live.ok) {
+        const int before = announcementLog().size();
+        const auto said = [&] {
+          juce::StringArray since;
+          for (int i = before; i < announcementLog().size(); ++i) since.add(announcementLog()[i]);
+          return since;
+        };
+        if (auto* mono = speech::titled(live.root(), "Mono")) {
+          mono->getAccessibilityHandler()->getActions().invoke(juce::AccessibilityActionType::press);
+          LiveScenario::pump(100);
+        }
+        expect(said().contains("Mono selected"), "heard: " + said().joinIntoString(" / "));
+        if (auto* stereo = speech::titled(live.root(), "Stereo")) {
+          stereo->getAccessibilityHandler()->getActions().invoke(juce::AccessibilityActionType::press);
+          LiveScenario::pump(100);
+        }
+        expect(said().contains("Stereo selected"), "heard: " + said().joinIntoString(" / "));
+      }
+    }
+
+    // Everything announced while the suites before this one ran (see
+    // runSelfTests), plus the above.
+    beginTest("status messages are short and plain");
+    const auto& log = announcementLog();
+    expect(!log.isEmpty(), "the run produced status messages to check");
+    for (const auto& said : log) {
+      // The device sign-in instructions carry the activation code and the
+      // address to type it at: long, but all of it is needed at once.
+      const bool instructions = said.startsWith("Sign in on your phone.");
+      expect(instructions || speech::wordCount(said) <= speech::kMaxAnnouncementWords,
+             "over " + juce::String(speech::kMaxAnnouncementWords) + " words: \"" + said + "\"");
+      expect(!speech::soundsLikeCode(said), "reads as code: \"" + said + "\"");
+      expect(!speech::repeatsWord(said), "repeats a word: \"" + said + "\"");
+    }
+    logMessage(juce::String(log.size()) + " status messages checked");
+  }
+};
+
+// The settings that change how the plugin is used without sight or a mouse:
+// Show Info Bar (the hint text), every Plugin
+// Settings toggle from a screen reader, and the groups the period and comma
+// keys stop at on both Settings pages.
+struct AccessibilitySettingsTests : juce::UnitTest {
+  AccessibilitySettingsTests() : juce::UnitTest("Accessibility settings", "ui") {}
+
+  static bool checked(juce::Component& c) {
+    auto* h = c.getAccessibilityHandler();
+    return h != nullptr && h->getCurrentState().isChecked();
+  }
+  static void toggle(juce::Component& c) {
+    auto& actions = c.getAccessibilityHandler()->getActions();
+    if (!actions.invoke(juce::AccessibilityActionType::toggle)) actions.invoke(juce::AccessibilityActionType::press);
+    LiveScenario::pump(50);
+  }
+  static bool press(LiveScenario& live, juce::juce_wchar c) {
+    return live.peer->handleKeyPress(juce::KeyPress(c, {}, c));
+  }
+  static juce::String groupOfFocus(juce::Component& scope) {
+    auto* group = a11y::enclosingGroup(LiveScenario::focused(), &scope);
+    return group != nullptr ? group->getTitle() : juce::String("(none)");
+  }
+  // Nothing focused, without Escape: Escape is the screen's Back now and
+  // would close Settings.
+  static void clearFocus() {
+    juce::Component::unfocusAllComponents();
+    LiveScenario::pump(20);
+  }
+  // Period from nothing focused until the walk comes round: the groups in order.
+  juce::StringArray walkGroups(LiveScenario& live, juce::Component& scope) {
+    clearFocus();
+    juce::StringArray visited;
+    for (int i = 0; i < 30; ++i) {
+      expect(press(live, '.'), "period moves to a group");
+      LiveScenario::pump(20);
+      const auto g = groupOfFocus(scope);
+      if (visited.contains(g)) break;
+      visited.add(g);
+    }
+    return visited;
+  }
+
+  void runTest() override {
+    LiveScenario live(*this, "settings-system");  // standalone: both Settings tabs
+    if (!live.ok) return;
+    auto& root = live.root();
+    const bool hintsWere = root.services().hints.enabled();
+    root.services().hints.setEnabled(true);
+
+    root.openSettings(SettingsScreen::Tab::plugin);
+    LiveScenario::pump(300);
+    auto* settings = root.settings();
+    expect(settings != nullptr);
+    if (settings == nullptr) return;
+
+    beginTest("Show Info Bar is a named toggle that hides and shows the hint bar");
+    if (auto* infoBar = speech::titled(*settings, "Show Info Bar"); infoBar != nullptr) {
+      expect(infoBar->getAccessibilityHandler()->getRole() == juce::AccessibilityRole::toggleButton);
+      expect(checked(*infoBar));
+      toggle(*infoBar);
+      expect(!root.services().hints.enabled() && !checked(*infoBar), "off");
+      auto* bar = drive::find(root, [](juce::Component& c) { return dynamic_cast<HintBar*>(&c) != nullptr; });
+      expect(bar != nullptr && !bar->isVisible(), "the hint bar hides");
+      toggle(*infoBar);
+      expect(root.services().hints.enabled() && checked(*infoBar), "back on");
+      expect(bar != nullptr && bar->isVisible(), "the hint bar returns");
+    } else {
+      expect(false, "no Show Info Bar toggle");
+    }
+
+    beginTest("period walks the Plugin Settings sections in reading order");
+    {
+      const auto groups = walkGroups(live, *settings);
+      int last = -1;
+      for (auto name : {"Settings pages", "Display", "NAM models", "Audio processing", "MIDI Mapping", "Diagnostics"}) {
+        const int at = groups.indexOf(name);
+        expect(at > last, juce::String(name) + " in order: " + groups.joinIntoString(", "));
+        last = juce::jmax(last, at);
+      }
+      expect(!groups.contains("(none)"), "every stop is in a group: " + groups.joinIntoString(", "));
+    }
+
+    beginTest("comma walks back");
+    {
+      clearFocus();
+      expect(press(live, '.'));
+      const auto firstGroup = groupOfFocus(*settings);
+      expect(press(live, '.'));
+      expect(groupOfFocus(*settings) != firstGroup);
+      expect(press(live, ','));
+      expectEquals(groupOfFocus(*settings), firstGroup);
+    }
+
+    beginTest("every Plugin Settings toggle flips from the screen reader and reads back");
+    {
+      std::vector<juce::Component::SafePointer<juce::Component>> toggles;
+      std::function<void(juce::Component&)> visit = [&](juce::Component& c) {
+        if (dynamic_cast<PillToggle*>(&c) != nullptr && c.isShowing() && c.isEnabled()) toggles.emplace_back(&c);
+        for (auto* child : c.getChildren()) visit(*child);
+      };
+      visit(*settings);
+      expect(toggles.size() >= 6, "found " + juce::String((int)toggles.size()) + " toggles");
+      for (auto& t : toggles) {
+        if (t == nullptr) continue;
+        const auto name = t->getAccessibilityHandler()->getTitle();
+        expect(name.isNotEmpty(), "a settings toggle has no name");
+        const bool was = checked(*t);
+        toggle(*t);
+        if (t == nullptr) continue;
+        expect(checked(*t) != was, name + " flips");
+        toggle(*t);
+        if (t == nullptr) continue;
+        expect(checked(*t) == was, name + " flips back");
+      }
+    }
+
+    beginTest("opening Settings over a focused control moves focus in; closing hands it back");
+    {
+      root.closeSettings();
+      LiveScenario::pump(100);
+      auto* account = drive::byHelpPrefix(root, "Account:");
+      expect(account != nullptr);
+      if (account != nullptr) {
+        LiveScenario::focus(*account);
+        expect(LiveScenario::focused() == account);
+        root.openSettings(SettingsScreen::Tab::plugin);
+        LiveScenario::pump(100);
+        expect(root.settings() != nullptr && root.settings()->isParentOf(LiveScenario::focused()),
+               "focus is on the Settings page, not behind it");
+        expect(live.key(juce::KeyPress::tabKey), "Tab moves within the page");
+        expect(root.settings() != nullptr && root.settings()->isParentOf(LiveScenario::focused()));
+        root.closeSettings();
+        LiveScenario::until([&] { return root.settings() == nullptr; });
+        LiveScenario::pump(50);
+        expect(LiveScenario::focused() == account, "focus is back on the account button");
+      }
+      clearFocus();
+    }
+
+    beginTest("period walks the System Settings sections");
+    root.openSettings(SettingsScreen::Tab::system);
+    LiveScenario::pump(300);
+    if (auto* system = root.settings()) {
+      const auto groups = walkGroups(live, *system);
+      for (auto name : {"Monitoring", "Audio Interface", "MIDI Inputs"})
+        expect(groups.contains(name), juce::String(name) + ": " + groups.joinIntoString(", "));
+      expect(groups.indexOf("Monitoring") < groups.indexOf("Audio Interface"));
+    }
+
+    root.closeSettings();
+    root.services().hints.setEnabled(hintsWere);
+    clearFocus();
+  }
+};
+
+// Every toggle on the faceplate and the chain, clicked with the mouse the
+// way a sighted user would: the state a screen reader reports follows the
+// click, and the click takes no keyboard focus (as upstream).
+struct ToggleClickTests : juce::UnitTest {
+  ToggleClickTests() : juce::UnitTest("Toggle clicks", "ui") {}
+
+  static bool inGroup(juce::Component& c, juce::Component& scope, const juce::StringArray& names) {
+    for (auto* g = a11y::enclosingGroup(&c, &scope); g != nullptr;
+         g = a11y::enclosingGroup(g->getParentComponent(), &scope))
+      if (names.contains(g->getTitle())) return true;
+    return false;
+  }
+
+  void runTest() override {
+    beginTest("clicks flip each toggle and the reported state follows");
+    LiveScenario live(*this, "main-stereo");
+    if (!live.ok) return;
+    auto& root = live.root();
+    const juce::StringArray scopes{"Global controls", "Chain", "Left chain", "Right chain"};
+    std::vector<juce::Component::SafePointer<juce::Component>> toggles;
+    std::function<void(juce::Component&)> visit = [&](juce::Component& c) {
+      auto* h = c.getAccessibilityHandler();
+      if (c.isShowing() && c.isEnabled() && h != nullptr && h->getCurrentState().isCheckable() &&
+          inGroup(c, root, scopes))
+        toggles.emplace_back(&c);
+      for (auto* child : c.getChildren()) visit(*child);
+    };
+    visit(root);
+    expect(toggles.size() >= 4, "found " + juce::String((int)toggles.size()) + " toggles");
+    auto mouse = live.mouse();
+    int flipped = 0;
+    for (auto& t : toggles) {
+      if (t == nullptr || !t->isShowing()) continue;  // an earlier click changed the layout
+      drive::scrollIntoView(*t);
+      const auto name = t->getAccessibilityHandler()->getTitle();
+      const bool was = t->getAccessibilityHandler()->getCurrentState().isChecked();
+      // The selected option of a one-of-many choice (Mono / Stereo) stays
+      // selected when clicked again: nothing to flip.
+      const bool radioLike = was && dynamic_cast<SegmentedText*>(t->getParentComponent()) != nullptr;
+      // Point first, as a hand does: tile chrome shows on hover.
+      mouse.at(live.centre(*t), false);
+      LiveScenario::pump(300);
+      auto* group = a11y::enclosingGroup(t.getComponent(), &root);
+      mouse.click(live.centre(*t));
+      LiveScenario::pump(50);
+      if (t == nullptr || radioLike) continue;
+      expect(t->getAccessibilityHandler()->getCurrentState().isChecked() != was, name + " flips on click");
+      // A click never takes keyboard focus (upstream): nothing in the
+      // toggle's group is focused by it.
+      if (t->getWantsKeyboardFocus()) {
+        auto* f = LiveScenario::focused();
+        expect(f != t.getComponent() && (f == nullptr || group == nullptr || !group->isParentOf(f)),
+               name + " does not take focus on click");
+      }
+      ++flipped;
+      if (!t->isShowing()) continue;
+      mouse.at(live.centre(*t), false);
+      LiveScenario::pump(300);
+      mouse.click(live.centre(*t));
+      LiveScenario::pump(50);
+      if (t != nullptr && t->isShowing())
+        expect(t->getAccessibilityHandler()->getCurrentState().isChecked() == was, name + " flips back");
+    }
+    expect(flipped >= 4, juce::String(flipped) + " toggles clicked");
+    live.key(juce::KeyPress::escapeKey);
+  }
+};
+
+// The keyboard and screen-reader paths added on top of upstream, and the
+// upstream rules they must not change for the mouse.
+struct KeyboardPathsTests : juce::UnitTest {
+  KeyboardPathsTests() : juce::UnitTest("Keyboard paths", "ui") {}
+
+  static juce::Component* titledStartingWith(juce::Component& root, const juce::String& prefix) {
+    return drive::find(root, [&](juce::Component& c) {
+      auto* h = c.getAccessibilityHandler();
+      return c.isShowing() && !a11y::isGroup(c) && h != nullptr && h->getTitle().startsWith(prefix);
+    });
+  }
+  static juce::StringArray spokenSince(int before) {
+    juce::StringArray since;
+    for (int i = before; i < announcementLog().size(); ++i) since.add(announcementLog()[i]);
+    return since;
+  }
+
+  void runTest() override {
+    beginTest("Escape closes Settings and returns focus to its opener");
+    {
+      LiveScenario live(*this, "settings-plugin");
+      if (live.ok) {
+        auto& root = live.root();
+        auto* account = drive::byHelpPrefix(root, "Account:");
+        expect(account != nullptr);
+        if (account != nullptr) {
+          LiveScenario::focus(*account);
+          root.openSettings(SettingsScreen::Tab::plugin);
+          LiveScenario::pump(200);
+          expect(root.settings() != nullptr && root.settings()->isParentOf(LiveScenario::focused()),
+                 "focus is on the Settings page");
+          expect(live.key(juce::KeyPress::escapeKey));
+          expect(LiveScenario::until([&] { return root.settings() == nullptr; }), "Escape closes Settings");
+          expect(LiveScenario::until([&] { return LiveScenario::focused() == account; }),
+                 "focus is back on the account button");
+        }
+      }
+    }
+
+    beginTest("A2-Lite / A2-Full: Tab reaches the radio group; arrows select and the default follows");
+    {
+      LiveScenario live(*this, "settings-plugin");
+      if (live.ok) {
+        auto& root = live.root();
+        root.openSettings(SettingsScreen::Tab::plugin);
+        LiveScenario::pump(300);
+        juce::Component::unfocusAllComponents();
+        RadioOption* reached = nullptr;
+        for (int i = 0; i < 200 && reached == nullptr; ++i) {
+          if (!live.key(juce::KeyPress::tabKey)) break;
+          LiveScenario::pump(10);
+          reached = dynamic_cast<RadioOption*>(LiveScenario::focused());
+        }
+        expect(reached != nullptr, "Tab reaches an A2 size option");
+        if (reached != nullptr) {
+          auto handler = reached->createAccessibilityHandler();
+          expect(handler->getRole() == juce::AccessibilityRole::radioButton);
+          expect(reached->getTitle() == "A2-Lite" || reached->getTitle() == "A2-Full");
+          // Make the reached option the selected one first.
+          if (!reached->selected()) {
+            expect(live.key(juce::KeyPress::spaceKey));
+            LiveScenario::pump(100);
+          }
+          expect(LiveScenario::until([&] { return reached->selected(); }));
+          const bool fullBefore = isSlimSizeFull(root.services().chain.state().namSlimSizeDefault);
+          expect(live.key(juce::KeyPress::downKey));
+          auto* other = dynamic_cast<RadioOption*>(LiveScenario::focused());
+          expect(other != nullptr && other != reached, "Down moves focus to the other option");
+          expect(LiveScenario::until([&] {
+            return isSlimSizeFull(root.services().chain.state().namSlimSizeDefault) != fullBefore;
+          }), "the default model size follows");
+          if (other != nullptr) {
+            expect(LiveScenario::until([&] { return other->selected() && !reached->selected(); }));
+            expect(other->getAccessibilityHandler()->getCurrentState().isChecked());
+          }
+          expect(live.key(juce::KeyPress::upKey));
+          expect(LiveScenario::until([&] {
+            return isSlimSizeFull(root.services().chain.state().namSlimSizeDefault) == fullBefore;
+          }), "Up selects it back");
+          expect(LiveScenario::focused() == reached);
+        }
+        juce::Component::unfocusAllComponents();
+      }
+    }
+
+    beginTest("EQ graph: arrows choose a band; a Frequency arrow steps the band's frequency");
+    {
+      LiveScenario live(*this, "main-detail-eq-curve");
+      if (live.ok) {
+        live.drive();
+        auto& root = live.root();
+        auto* graph = titledStartingWith(root, "Band");
+        expect(graph != nullptr, "the EQ graph is a named Tab stop");
+        auto* editor = graph != nullptr ? graph->findParentComponentOfClass<BlockEqView>() : nullptr;
+        expect(editor != nullptr);
+        if (graph != nullptr && editor != nullptr && editor->bands().size() > 1) {
+          expect(graph->getAccessibilityHandler()->getRole() == juce::AccessibilityRole::slider);
+          LiveScenario::focus(*graph);
+          expect(live.key(juce::KeyPress::homeKey));
+          expect(graph->getAccessibilityHandler()->getTitle().startsWith("Band 1"));
+          expect(live.key(juce::KeyPress::rightKey));
+          expect(graph->getAccessibilityHandler()->getTitle().startsWith("Band 2"), "Right selects band 2");
+          expectWithinAbsoluteError(graph->getAccessibilityHandler()->getValueInterface()->getCurrentValue(), 2.0, 1e-9);
+          auto* freq = speech::titled(root, "Frequency");
+          expect(freq != nullptr, "the Frequency chip is a named Tab stop");
+          if (freq != nullptr) {
+            expect(freq->getAccessibilityHandler()->getRole() == juce::AccessibilityRole::slider);
+            const double before = editor->bands()[1].freqHz;
+            LiveScenario::focus(*freq);
+            expect(live.key(juce::KeyPress::upKey));
+            expect(LiveScenario::until([&] { return editor->bands()[1].freqHz > before; }), "Up raises the frequency");
+            expect(live.key(juce::KeyPress::downKey));
+            expect(LiveScenario::until([&] { return std::abs(editor->bands()[1].freqHz - before) < before * 0.01; }),
+                   "Down brings it back");
+          }
+        }
+        juce::Component::unfocusAllComponents();
+      }
+    }
+
+    beginTest("Delete resets a focused knob to its default");
+    {
+      LiveScenario live(*this, "main-mono");
+      if (live.ok) {
+        Knob::Options options;
+        options.label = "Test";
+        options.scale = &scales::gainDb();
+        options.defaultValue = 0.5f;
+        Knob knob(options);
+        knob.setBounds(0, 0, 60, 60);
+        live.root().addAndMakeVisible(knob);
+        knob.setValue(0.9f);
+        std::vector<float> emitted;
+        knob.onChange = [&](float v) { emitted.push_back(v); };
+        expect(knob.createAccessibilityHandler()->getHelp().contains("Delete resets"));
+        // Without keyboard focus Delete is not the knob's.
+        expect(!knob.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey)));
+        LiveScenario::focus(knob);
+        expect(live.key(juce::KeyPress::deleteKey));
+        expectWithinAbsoluteError(knob.value(), 0.5f, 1e-6f);
+        expect(!emitted.empty() && std::abs(emitted.back() - 0.5f) < 1e-6f, "the reset is reported");
+        live.root().removeChildComponent(&knob);
+      }
+    }
+
+    beginTest("ModelSelect: Next announces the model and its position");
+    {
+      ModelSelect select;
+      select.setOptions({{"a", "Clean"}, {"b", "Crunch"}, {"c", "Lead"}});
+      select.setValue("a");
+      select.onChange = [&](const juce::String& id) { select.setValue(id); };
+      auto* trigger = drive::find(select, [](juce::Component& c) { return c.getName() == "model select"; });
+      expect(trigger != nullptr);
+      if (trigger != nullptr) {
+        auto handler = trigger->createAccessibilityHandler();
+        expect(handler->getRole() == juce::AccessibilityRole::comboBox);
+        expectEquals(handler->getTitle(), juce::String("Model"));
+        expectEquals(handler->getValueInterface()->getCurrentValueAsString(), juce::String("Clean, 1 of 3"));
+      }
+      auto* next = dynamic_cast<Clickable*>(drive::find(select, [](juce::Component& c) {
+        auto* b = dynamic_cast<Clickable*>(&c);
+        return b != nullptr && b->accessibleName() == "Next model";
+      }));
+      expect(next != nullptr);
+      if (next != nullptr && next->onClick) {
+        const int before = announcementLog().size();
+        next->onClick();
+        expect(spokenSince(before).contains("Crunch, 2 of 3"), "said: " + spokenSince(before).joinIntoString(" | "));
+        if (trigger != nullptr)
+          expectEquals(trigger->createAccessibilityHandler()->getValueInterface()->getCurrentValueAsString(),
+                       juce::String("Crunch, 2 of 3"));
+      }
+    }
+
+    beginTest("presets move by keyboard: Space, Down, Space reorders and is spoken");
+    {
+      LiveScenario live(*this, "chrome-preset-browse");
+      if (live.ok) {
+        auto& root = live.root();
+        drive::clickByHelp(root, "Presets:");
+        drive::wait(300);
+        drive::clickByHelp(root, "Reorder:");  // grips show in reorder mode
+        drive::wait(200);
+        // The topmost grip on screen.
+        juce::Component* grip = nullptr;
+        drive::find(root, [&](juce::Component& c) {
+          auto* h = c.getAccessibilityHandler();
+          if (c.isShowing() && h != nullptr && h->getTitle().startsWith("Move ") &&
+              (grip == nullptr || c.getScreenY() < grip->getScreenY()))
+            grip = &c;
+          return false;
+        });
+        expect(grip != nullptr, "a preset row has a Move grip");
+        if (grip != nullptr) {
+          const auto name = grip->getTitle().fromFirstOccurrenceOf("Move ", false, false);
+          // The order within the grip's own section (factory or user): moves
+          // never cross it, and the store may list the sections either way.
+          bool factory = false;
+          for (const auto& p : root.services().presets.presets())
+            if (p.name == name) factory = p.factory;
+          const auto order = [&] {
+            juce::StringArray names;
+            for (const auto& p : root.services().presets.presets())
+              if (p.factory == factory) names.add(p.name);
+            return names;
+          };
+          const auto before = order();
+          const int at = before.indexOf(name);
+          expect(at >= 0, name + " is in the preset list");
+          const int spoken = announcementLog().size();
+          LiveScenario::focus(*grip);
+          expect(live.key(juce::KeyPress::spaceKey));
+          expect(live.key(juce::KeyPress::downKey));
+          expect(live.key(juce::KeyPress::spaceKey));
+          expect(LiveScenario::until([&] { return order().indexOf(name) == at + 1; }),
+                 name + " moved down one: " + before.joinIntoString(", ") + " -> " + order().joinIntoString(", "));
+          const auto said = spokenSince(spoken);
+          expect(said.size() > 0 && said[0].startsWith("Moving " + name), "said: " + said.joinIntoString(" | "));
+          expect(said.joinIntoString("|").contains(name + ", position "),
+                 "the new position is spoken: " + said.joinIntoString(" | "));
+          expect(said.contains("Move complete"), "said: " + said.joinIntoString(" | "));
+          expect(LiveScenario::until([&] {
+            auto* f = LiveScenario::focused();
+            return f != nullptr && f->getTitle() == "Move " + name;
+          }), "focus stays on the moved row's grip");
+        }
+        juce::Component::unfocusAllComponents();
+      }
+    }
+
+    beginTest("a mouse click on a button or a knob takes no keyboard focus (upstream)");
+    {
+      LiveScenario live(*this, "main-mono");
+      if (live.ok) {
+        auto& root = live.root();
+        juce::Component::unfocusAllComponents();
+        LiveScenario::pump(20);
+        auto* undo = drive::byHelpPrefix(root, "Undo:");
+        auto* input = drive::find(root, [](juce::Component& c) {
+          return dynamic_cast<Knob*>(&c) != nullptr && c.isShowing() && c.getTitle() == "Input";
+        });
+        expect(undo != nullptr && input != nullptr);
+        auto mouse = live.mouse();
+        if (undo != nullptr) {
+          mouse.click(live.centre(*undo));
+          LiveScenario::pump(30);
+          expect(LiveScenario::focused() == nullptr, "a button click leaves nothing focused");
+        }
+        if (input != nullptr) {
+          mouse.click(live.centre(*input));
+          LiveScenario::pump(30);
+          expect(LiveScenario::focused() == nullptr, "a knob click leaves nothing focused");
+        }
+
+        beginTest("the hint bar shows upstream's text for a knob and a button");
+        if (undo != nullptr) {
+          mouse.at(live.centre(*undo), false);
+          LiveScenario::pump(50);
+          expectEquals(root.services().hints.current(), juce::String("Undo: revert last chain edit."));
+          expectEquals(undo->getHelpText(), juce::String("Undo: revert last chain edit."));
+        }
+        if (input != nullptr) {
+          mouse.at(live.centre(*input), false);
+          LiveScenario::pump(50);
+#if JUCE_WINDOWS
+          const auto upstream = juce::String::fromUTF8(
+              "Input: chain input level, \xc2\xb1" "24 dB. Shift+drag: fine \xc2\xb7 double-click: type \xc2\xb7 Alt+click: reset");
+          expectEquals(root.services().hints.current(), upstream);
+#endif
+          expectEquals(root.services().hints.current(), help::text(help::Key::inputLevel));
+          // The keyboard instructions are spoken only.
+          expect(!root.services().hints.current().contains("Delete"));
+        }
+        mouse.at(live.centre(root).translated(0, -2000.0f), false);
+      }
+    }
+  }
+};
+
+// Last, so the speech checks see every status message the suites above spoke.
+AccessibilitySettingsTests accessibilitySettingsTests;
+ToggleClickTests toggleClickTests;
+KeyboardPathsTests keyboardPathsTests;
+SpeechTests speechTests;
+
 }  // namespace
 
 int runSelfTests() {
@@ -3959,6 +4757,7 @@ int runSelfTests() {
     void logMessage(const juce::String& message) override { std::cout << message << std::endl; }
   } runner;
   runner.setAssertOnFailure(false);
+  help::observeAnnouncements([](const juce::String& text) { announcementLog().add(text); });
   const auto filter = juce::SystemStats::getEnvironmentVariable("T3K_UI_TEST_FILTER", "");
   if (filter.isEmpty()) runner.runTestsInCategory("ui");
   else {

@@ -10,9 +10,6 @@
 #include "core/Labels.h"
 #include "core/Paint.h"
 #include "core/Theme.h"
-#include "model/ToneOverview.h"
-#include "views/block/BlockInfoPanel.h"
-#include "widgets/DragScroller.h"
 #include "widgets/SecondaryPress.h"
 
 namespace t3k::ui {
@@ -24,53 +21,6 @@ constexpr float kBadgeHeight = 14;
 constexpr float kBadgeWidth = kBadgeHeight * 17.5f / 20.0f;
 constexpr float kBadgeGap = 6;
 }  // namespace
-
-class ToneCard::InfoPopover : public Popover {
-public:
-  InfoPopover(const Tone& tone, const juce::String& url, std::function<void(const juce::String&)> openUrl)
-      : scroller_(DragScroller::Axis::vertical, DragScroller::Keys::none), close_("Close", PillButton::Style::outline) {
-    setTitle(tone.title + " — More info");
-    title_.setText(tone.title, juce::dontSendNotification);
-    title_.setFont(Fonts::sans(16, true));
-    title_.setColour(juce::Label::textColourId, theme::kWhite);
-    addAndMakeVisible(title_);
-    close_.setHelpText("Close tone information and return to the browsing result.");
-    close_.onClick = [this] { dismiss(); };
-    addAndMakeVisible(close_);
-    scroller_.setViewedComponent(&panel_, false);
-    addAndMakeVisible(scroller_);
-    BlockInfoPanel::State state;
-    // This payload was already returned by the accessible catalog feed.
-    // Inspecting it never requests a model or modifies the audio chain.
-    state.authenticated = true;
-    state.tone = tone;
-    state.pageUrl = url;
-    panel_.setState(std::move(state));
-    panel_.onHeightChanged = [this] { resized(); };
-    panel_.onOpenUrl = std::move(openUrl);
-    setSize(480, 420);
-  }
-  void resized() override {
-    auto area = contentBounds().reduced(16);
-    auto header = area.removeFromTop(36);
-    close_.setBounds(header.removeFromRight(76));
-    title_.setBounds(header.reduced(0, 2));
-    area.removeFromTop(12);
-    scroller_.setBounds(area);
-    const int width = juce::jmax(1, area.getWidth() - 12);
-    panel_.setSize(width, panel_.heightFor(width));
-  }
-  void paint(juce::Graphics& g) override {
-    const auto box = getLocalBounds().toFloat();
-    paint::fill(g, box, theme::kPanelCorner, theme::kPanelBg);
-    paint::border(g, box, theme::kPanelCorner, theme::kBorder);
-  }
-private:
-  juce::Label title_;
-  BlockInfoPanel panel_;
-  DragScroller scroller_;
-  PillButton close_;
-};
 
 namespace {
 class ToneCardAccessibility : public juce::AccessibilityHandler {
@@ -84,11 +34,15 @@ public:
                   card.triggerClick();
                 })
                 .addAction(juce::AccessibilityActionType::showMenu, [&card] {
+                  if (!card.canSelect()) return;
                   if (card.isShowing()) card.grabKeyboardFocus();
                   card.openMenu(card.getLocalBounds().getCentre());
                 })), card_(card) {}
   juce::String getTitle() const override { return card_.accessibleName(); }
-  juce::String getHelp() const override { return card_.getHelpText(); }
+  // Spoken only (the card has no hint-bar text, as before).
+  juce::String getHelp() const override {
+    return card_.canSelect() ? "Enter selects. Shift+F10: open on web." : juce::String();
+  }
 private:
   ToneCard& card_;
 };
@@ -97,14 +51,6 @@ private:
 ToneCard::ToneCard(ImageLoader& images, const Tone& tone)
     : Clickable(tone.title), tone_(tone), image_(images) {
   onOpenUrl = [](const juce::String& target) { juce::URL(target).launchInDefaultBrowser(); };
-
-  juce::String explanation = tone_.description.trim();
-  if (explanation.isEmpty()) {
-    for (const auto& gear : labels::gearFilters())
-      if (tone_.gear == gear.id) { explanation = gear.description; break; }
-    if (explanation.isEmpty()) explanation = "No description supplied by the creator.";
-  }
-  setHelpText(explanation + " Enter or Space: select this tone. Shift+F10 or Applications key: More info and Open on web.");
 
   image_.setCornerRadius(kImageCorner);
   image_.setTone(tone_.images.empty() ? juce::String() : tone_.images.front(), tone_.gear, /*local=*/false);
@@ -125,7 +71,6 @@ ToneCard::ToneCard(ImageLoader& images, const Tone& tone)
 
 ToneCard::~ToneCard() {
   if (menu_) menu_->close();
-  if (info_) info_->close();
 }
 
 juce::String ToneCard::webUrl() const {
@@ -138,7 +83,6 @@ void ToneCard::openMenu(juce::Point<int> point) {
   // A dismissed row may still be executing its callback.
   if (auto* old = menu_.release()) juce::MessageManager::callAsync([old] { delete old; });
   menu_ = std::make_unique<ContextMenu>(std::vector<ContextMenu::Item>{
-      {"More info", Icon::Info, help::Key::toneInfo, [this] { showInfo(); }},
       {"Open on web", Icon::ExternalLink, help::Key::viewOnT3k,
        [this] { if (onOpenUrl) onOpenUrl(webUrl()); }},
   });
@@ -146,36 +90,14 @@ void ToneCard::openMenu(juce::Point<int> point) {
   menu_->openAtPoint(*this, point);
 }
 
-void ToneCard::showInfo() {
-  if (info_) info_->close();
-  info_ = std::make_unique<InfoPopover>(tone_, webUrl(), onOpenUrl);
-  info_->openAt(*this, getLocalBounds().getCentre());
-}
-
-void ToneCard::mouseDown(const juce::MouseEvent& event) {
-  contextPress_ = event.mods.isPopupMenu();
-  if (contextPress_) { openMenu(event.getPosition()); return; }
-  if (menu_ && menu_->isOpen()) {
-    menu_->dismiss();
-    contextPress_ = true;
-    return;
-  }
-  if (disabled_) return;
-  Clickable::mouseDown(event);
-}
-
-void ToneCard::mouseUp(const juce::MouseEvent& event) {
-  if (contextPress_) { contextPress_ = false; return; }
-  if (!disabled_) Clickable::mouseUp(event);
-}
-
 bool ToneCard::keyPressed(const juce::KeyPress& key) {
+  // Only with keyboard focus (a click never focuses the card); the mouse
+  // has no menu here.
   if ((key.isKeyCode(juce::KeyPress::F10Key) && key.getModifiers().isShiftDown()) ||
       key.isKeyCode(kWindowsApplicationsKey)) {
-    openMenu(getLocalBounds().getCentre());
+    keyboardContextMenu();
     return true;
   }
-  if (disabled_ && (key == juce::KeyPress::returnKey || key == juce::KeyPress::spaceKey)) return true;
   return Clickable::keyPressed(key);
 }
 
@@ -204,8 +126,10 @@ void ToneCard::setDisabled(bool disabled) {
 }
 
 void ToneCard::syncState() {
-  // Inspection stays available even when the tone cannot currently be loaded.
-  setEnabled(true);
+  setEnabled(!disabled_);
+  // Screen readers only: the creator's description, and why a dimmed card
+  // does nothing (a disabled card is still in the screen reader's tree).
+  setDescription((disabled_ ? juce::String("Unavailable in the plugin. ") : juce::String()) + tone_.description.trim());
   // JUCE has no not-allowed cursor; the dimmed card carries the meaning.
   setMouseCursor(disabled_ ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
   // opacity: DISABLED_OPACITY while disabled and not the card being picked.

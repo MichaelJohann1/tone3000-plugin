@@ -22,7 +22,10 @@ void ChainStore::refresh(bool force) {
 }
 
 juce::String ChainStore::loadingFeedback(const ChainState& before, const ChainState& after) {
-  juce::StringArray messages;
+  // Failures each get their own message (each needs its own Retry); loads
+  // and finished loads name the tone when there is one, and count them when
+  // several land at once (a preset), so the reader is not tied up for long.
+  juce::StringArray failures, loading, loaded;
   const auto status = [](const ChainItem& item) {
     return item.loadFailed ? 2 : (item.modelLoading || !item.loaded ? 0 : 1);
   };
@@ -35,13 +38,22 @@ juce::String ChainStore::loadingFeedback(const ChainState& before, const ChainSt
           (old->activeModelId != item.activeModelId || old->tone.id != item.tone.id || old->tone.title != item.tone.title);
       if (old != nullptr && old->isTone() && status(*old) == status(item) && !changedModel) continue;
       const auto label = item.tone.title + ", " + side + "position " + juce::String(static_cast<int>(i) + 1);
-      if (status(item) == 2) messages.add("Could not load " + label + ". Use Retry load to try again.");
-      else if (status(item) == 0) messages.add("Loading " + label);
-      else messages.add("Loaded " + label);
+      if (status(item) == 2) failures.add("Could not load " + label + ". Use Retry load to try again.");
+      else if (status(item) == 0) loading.add(label);
+      else loaded.add(label);
     }
   };
   inspect(after.chain, after.stereoEnabled ? "left chain, " : "");
   if (after.stereoEnabled && after.chainRight) inspect(*after.chainRight, "right chain, ");
+  const auto summary = [](const juce::String& verb, const juce::StringArray& labels) -> juce::String {
+    if (labels.isEmpty()) return {};
+    if (labels.size() == 1) return verb + " " + labels[0];
+    return verb + " " + juce::String(labels.size()) + " tones";
+  };
+  juce::StringArray messages;
+  messages.addArray(failures);
+  for (const auto& m : {summary("Loading", loading), summary("Loaded", loaded)})
+    if (m.isNotEmpty()) messages.add(m);
   return messages.joinIntoString(". ");
 }
 

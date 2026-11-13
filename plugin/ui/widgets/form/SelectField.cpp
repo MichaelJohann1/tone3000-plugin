@@ -115,8 +115,10 @@ private:
 SelectField::SelectField(const juce::String& name) : dropdown_(std::make_unique<Dropdown>(*this)) {
   setName(name);
   setTitle(name);
+  // A Tab stop for the keyboard; a click never focuses it (the host keeps
+  // its keys), as before.
   setWantsKeyboardFocus(true);
-  setMouseClickGrabsKeyboardFocus(true);
+  setMouseClickGrabsKeyboardFocus(false);
   setMouseCursor(juce::MouseCursor::PointingHandCursor);
   dropdown_->onDismiss = [this] { repaint(); };
 }
@@ -156,7 +158,6 @@ void SelectField::setDisabled(bool disabled) {
   if (disabled_ == disabled) return;
   disabled_ = disabled;
   if (disabled) close();
-  setEnabled(!disabled);
   setWantsKeyboardFocus(!disabled);
   setMouseCursor(disabled ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
   repaint();
@@ -166,9 +167,12 @@ bool SelectField::isOpen() const { return dropdown_->isOpen(); }
 
 void SelectField::open() {
   if (disabled_ || !isEnabled() || options_.empty() || isOpen()) return;
+  // Opened from the keyboard: focus lands on the chosen row and returns
+  // here on close. A click leaves focus alone, so nothing stays focused.
+  const bool keyboard = hasKeyboardFocus(false);
   dropdown_->rebuild();
   dropdown_->open(*this, Popover::Align::left, kListGap);
-  dropdown_->focusOption();
+  if (keyboard) dropdown_->focusOption();
   repaint();
 }
 
@@ -218,14 +222,19 @@ public:
   explicit SelectHandler(SelectField& field)
       : juce::AccessibilityHandler(field, juce::AccessibilityRole::comboBox,
             juce::AccessibilityActions()
-                .addAction(juce::AccessibilityActionType::press, [&field] { field.open(); })
-                .addAction(juce::AccessibilityActionType::showMenu, [&field] { field.open(); }),
+                .addAction(juce::AccessibilityActionType::press, [&field] { pressed(field); })
+                .addAction(juce::AccessibilityActionType::showMenu, [&field] { pressed(field); }),
             {std::make_unique<SelectValue>(field)}), field_(field) {}
   juce::AccessibleState getCurrentState() const override {
     auto state = juce::AccessibilityHandler::getCurrentState().withExpandable();
     return field_.isOpen() ? state.withExpanded() : state.withCollapsed();
   }
 private:
+  // A screen reader's press is a keyboard open: focus the field first.
+  static void pressed(SelectField& field) {
+    if (field.isShowing() && field.getWantsKeyboardFocus()) field.grabKeyboardFocus();
+    field.open();
+  }
   SelectField& field_;
 };
 }  // namespace

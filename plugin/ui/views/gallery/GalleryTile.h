@@ -66,6 +66,10 @@ protected:
   // An OS file drag is hovering (upload glyph + green dashed border).
   virtual void dropArmedChanged(bool /*armed*/) {}
   virtual void travellingChanged(bool /*travelling*/) {}
+  // A lasting state a screen reader should hear on every visit ("loading",
+  // "load failed"), lower case; empty for none. Read before the tile's
+  // description unless that already says it.
+  virtual juce::String accessibleStatus() const { return {}; }
 
   bool dropArmed() const { return dropArmed_; }
   bool menuOpen() const { return menu_ != nullptr && menu_->isOpen(); }

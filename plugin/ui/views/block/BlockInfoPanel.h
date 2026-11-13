@@ -1,6 +1,6 @@
 // Extra tone metadata under the detail card's title column (port of
 // BlockInfoPanel.tsx): hairline, then either a sign-in / retry prompt or the
-// overview, original creator description behind MORE/LESS, makes & models, and tag chips;
+// description (3-line clamp with MORE/LESS), makes & models, and tag chips;
 // another hairline and the "View on TONE3000" link close it. Empty sections
 // are omitted. Height depends on width and content, so the owner lays it
 // out via heightFor(width) before setBounds.
@@ -16,7 +16,6 @@
 #include "core/TextFlow.h"
 #include "model/Tone.h"
 #include "widgets/PillButton.h"
-#include "widgets/form/FormText.h"
 
 namespace t3k::ui {
 
@@ -30,7 +29,7 @@ public:
     juce::String error;         // non-empty: the retry prompt
     std::optional<Tone> tone;   // the fetched catalog tone
     juce::String pageUrl;       // public tone page
-    juce::String modelName;     // selected model, not the entire pack
+    juce::String modelName;     // selected model (not shown; kept for callers)
   };
   void setState(State state);
 
@@ -42,14 +41,16 @@ public:
 
   // Content height at `width` (rebuilds the flow for that width).
   int heightFor(int width);
+  // Keyboard only (the Info button had focus): focus the first readable
+  // part of the panel, so a screen reader starts at the description.
   void focusContent();
 
   void paint(juce::Graphics& g) override;
   void resized() override;
 
 private:
-  Paragraph overview_, creatorText_;
   class MoreButton;
+  class Readout;
   static constexpr int kGap = 24;
   static constexpr int kSectionGap = 8;
   static constexpr int kMakesGap = 4;
@@ -92,6 +93,10 @@ private:
   std::unique_ptr<PillButton> prompt_;  // Log In / Try again
   std::unique_ptr<MoreButton> more_;
   std::unique_ptr<PillButton> view_;
+  // Screen-reader text over the painted description / makes / tags: paints
+  // nothing and lets the mouse through, so the panel looks and hovers as
+  // before.
+  std::unique_ptr<Readout> descText_, makesText_, tagsText_;
 };
 
 }  // namespace t3k::ui

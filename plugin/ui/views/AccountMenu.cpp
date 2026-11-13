@@ -70,6 +70,19 @@ AccountMenu::~AccountMenu() { menu_.close(); }
 void AccountMenu::setAuthenticated(bool authenticated) {
   menu_.login.setVisible(!authenticated);
   menu_.logout.setVisible(authenticated);
+  authenticated_ = authenticated;
+  updateDescription();
+}
+
+void AccountMenu::setUserName(const juce::String& name) {
+  userName_ = name;
+  updateDescription();
+}
+
+void AccountMenu::updateDescription() {
+  setDescription(!authenticated_ ? juce::String("Signed out")
+                 : userName_.isNotEmpty() ? "Signed in as " + userName_
+                                          : juce::String("Signed in"));
 }
 
 void AccountMenu::openMenu() { menu_.open(*this, Popover::Align::right, kMenuGap); }
