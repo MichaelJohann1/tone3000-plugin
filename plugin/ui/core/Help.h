@@ -23,7 +23,7 @@ enum class Key {
   alignOffset, alignWobble, alignWobblePower, alignCrossover, alignCrossoverPower,
   alignDiffuse, alignAdvert, alignPower, autoAlign,
   // Top bar
-  tuner, undo, redo, settings, account, monoMode, stereoMode,
+  tuner, undo, redo, settings, account, accountProfile, monoMode, stereoMode,
   // Presets
   presetPrev, presetNext, presetBrowse, presetSave, presetNew, presetRename, presetDelete,
   presetReorder, presetDrag, presetPcToggle, presetPc,

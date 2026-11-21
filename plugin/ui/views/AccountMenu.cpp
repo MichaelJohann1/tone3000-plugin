@@ -20,6 +20,8 @@ constexpr int kLinkIcon = 14;
 // Profile row
 AccountMenu::ProfileRow::ProfileRow() : Clickable({}) {
   setMouseCursor(juce::MouseCursor::PointingHandCursor);
+  // The title is the username; the help says the row opens the profile.
+  setHelpText(help::text(help::Key::accountProfile));
   addAndMakeVisible(avatar);
 }
 

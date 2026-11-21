@@ -132,6 +132,7 @@ std::map<Key, String> buildTable() {
   t[Key::redo] = U("Redo: re-apply undone edit.");
   t[Key::settings] = U("Settings: plugin and audio options.");
   t[Key::account] = U("Account: settings and TONE3000 sign-out.");
+  t[Key::accountProfile] = U("Profile: open your TONE3000 profile in your browser.");
   t[Key::monoMode] = U("Mono: one chain, both outputs.");
   t[Key::stereoMode] = U("Stereo: independent Left/Right chains.");
 
