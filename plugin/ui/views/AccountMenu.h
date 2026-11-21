@@ -1,6 +1,7 @@
 // Account pill for the header (port of AccountMenu.tsx): hamburger + avatar
-// in a bordered rounded-full button opening a dark dropdown with Settings
-// and Login/Logout.
+// in a bordered rounded-full button opening a dark dropdown with Settings,
+// the signed-in profile (avatar + username, opens in the browser) and
+// Login/Logout.
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -25,32 +26,53 @@ public:
   void setAuthenticated(bool authenticated);
   // The signed-in user's name, for screen readers: the button's
   // description reads "Signed in as <name>" (or "Signed in" / "Signed out").
-  void setUserName(const juce::String& name);
-  void setAvatar(ImageLoader& images, const juce::String& url) { avatar_.setImage(images, url); }
+  void setDisplayName(const juce::String& name);
+  // The account handle shown on the menu's profile row.
+  void setUsername(const juce::String& username);
+  void setAvatar(ImageLoader& images, const juce::String& url);
   void openMenu();
 
-  std::function<void()> onOpenSettings, onLogin, onLogout;
+  std::function<void()> onOpenProfile, onOpenSettings, onLogin, onLogout;
 
   void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
   void resized() override;
 
 private:
+  // Avatar + username in the dropdown's row style, with an external-link
+  // glyph on the right: the row opens the browser.
+  class ProfileRow : public Clickable {
+  public:
+    ProfileRow();
+    void setUsername(const juce::String& username);
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
+    void resized() override;
+    Avatar avatar;
+
+  private:
+    juce::String username_;
+  };
+
   class Menu : public Popover {
   public:
     Menu();
     void paint(juce::Graphics& g) override;
     void resized() override;
+    // Height follows the visible rows.
+    void relayout();
     MenuRow settings{"Settings", Icon::Settings};
+    ProfileRow profile;
     MenuRow login{"Login", Icon::LogIn};
     MenuRow logout{"Logout", Icon::LogOut};
   };
 
   void updateDescription();
+  void updateProfileRow();
 
   Avatar avatar_;
   Menu menu_;
   bool authenticated_ = false;
-  juce::String userName_;
+  juce::String displayName_;
+  juce::String username_;
 };
 
 }  // namespace t3k::ui

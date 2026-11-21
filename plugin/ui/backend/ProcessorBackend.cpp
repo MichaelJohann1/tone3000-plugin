@@ -18,11 +18,15 @@ ProcessorBackend::ProcessorBackend(TONE3000Processor& processor, juce::Component
   processor_.midiMapper.onChanged = [this] {
     listeners.call([](Listener& l) { l.midiMapChanged(); });
   };
+  processor_.midiMapper.onTunerToggle = [this] {
+    listeners.call([](Listener& l) { l.tunerToggleRequested(); });
+  };
 }
 
 ProcessorBackend::~ProcessorBackend() {
-  // The mapper outlives the editor (it's the processor's): detach our hook.
+  // The mapper outlives the editor (it's the processor's): detach our hooks.
   processor_.midiMapper.onChanged = nullptr;
+  processor_.midiMapper.onTunerToggle = nullptr;
   // Tear down the audio settings controller before the listeners it reports to.
   audioSettings_.reset();
   // The tuner and block spectrum analyzers are only useful while the UI is
@@ -116,6 +120,9 @@ bool ProcessorBackend::setBlockParam(const std::string& blockId, const juce::Str
 }
 bool ProcessorBackend::setBlockSlimSize(const std::string& blockId, double slimSize) {
   return processor_.setBlockSlimSize(blockId, slimSize);
+}
+bool ProcessorBackend::setBlockIrStereo(const std::string& blockId, bool stereo) {
+  return processor_.setBlockIrStereo(blockId, stereo);
 }
 bool ProcessorBackend::setBlockEqBand(const std::string& blockId, int bandIndex,
                                       const juce::var& band) {
@@ -224,6 +231,7 @@ bool ProcessorBackend::setMidiCcMapping(const juce::String& targetId, int cc) {
 // Meters / tuner / auto-measure
 juce::var ProcessorBackend::getMeterLevels() { return processor_.getMeterLevels(); }
 void ProcessorBackend::setTunerEnabled(bool enabled) { processor_.setTunerEnabled(enabled); }
+void ProcessorBackend::setTunerMuted(bool muted) { processor_.setTunerMuted(muted); }
 juce::var ProcessorBackend::getTunerReading() { return processor_.getTunerReading(); }
 void ProcessorBackend::startAutoBalance() { processor_.startAutoBalance(); }
 void ProcessorBackend::cancelAutoBalance() { processor_.cancelAutoBalance(); }

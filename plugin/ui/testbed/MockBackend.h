@@ -25,6 +25,10 @@ public:
   // Live: meters, spectrum, tuner and input levels follow a moving signal
   // (MockSignal) instead of the scenario's frozen values.
   void setLive(bool live) { signal_ = live ? std::make_unique<MockSignal>() : nullptr; }
+  // As a MIDI control mapped to the tuner firing.
+  void fireTunerToggle() {
+    listeners.call([](Listener& l) { l.tunerToggleRequested(); });
+  }
 
   juce::RangedAudioParameter* parameter(const juce::String& id) override;
 
@@ -70,6 +74,7 @@ public:
 
   bool setBlockParam(const std::string&, const juce::String&, double) override { return true; }
   bool setBlockSlimSize(const std::string& blockId, double slimSize) override;
+  bool setBlockIrStereo(const std::string& blockId, bool stereo) override;
   bool setBlockEqBand(const std::string&, int, const juce::var&) override { return true; }
   bool setBlockEqEnabled(const std::string&, bool) override { return true; }
   bool setBlockEqPre(const std::string&, bool) override { return true; }
@@ -116,7 +121,12 @@ public:
   bool setMidiCcMapping(const juce::String& targetId, int cc) override;
 
   juce::var getMeterLevels() override;
-  void setTunerEnabled(bool) override {}
+  // As the processor: closing the tuner clears the mute.
+  void setTunerEnabled(bool enabled) override {
+    if (!enabled) tunerMuted_ = false;
+  }
+  void setTunerMuted(bool muted) override { tunerMuted_ = muted; }
+  bool tunerMuted() const { return tunerMuted_; }
   juce::var getTunerReading() override { return signal_ != nullptr ? signal_->tuner() : tuner_; }
   void startAutoBalance() override {}
   void cancelAutoBalance() override {}
@@ -155,6 +165,7 @@ private:
   std::vector<juce::String> machineDefaults_;
   juce::var meters_;
   juce::var tuner_;
+  bool tunerMuted_ = false;
   juce::var autoMeasure_;
   juce::String version_;
   std::unique_ptr<MockSignal> signal_;

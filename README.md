@@ -82,7 +82,7 @@ reconfigure.
 
 ### 3. TONE3000 publishable key
 
-The plugin reads your TONE3000 publishable key at configure time from a
+The plugin reads a TONE3000 publishable key at configure time from a
 `.env` file at the repo root (`.env.local` overrides it and a variable in
 the configure environment overrides both; [`.env.example`](.env.example)
 documents every key). Set it before the first build, and reconfigure after
@@ -90,9 +90,19 @@ changing it:
 
 ```sh
 # .env
-T3K_PUBLISHABLE_KEY=t3k_pub_your_key_here
+T3K_PUBLISHABLE_KEY=t3k_pub_Ej7NYu-huVjA5TwLPTb_7xTblnD4ghQG
 # Optional: point at staging or self-hosted TONE3000
 # T3K_API_DOMAIN=https://staging.tone3000.com
+```
+
+That is the community key, for source builds and distro packages. It is the
+OAuth client ID, not a secret, so it is fine to ship in a binary. Official
+releases use their own key; to use yours, make one in TONE3000 > Settings >
+API Keys. A package build with no `.env` can pass it in the configure
+environment instead:
+
+```sh
+T3K_PUBLISHABLE_KEY=t3k_pub_Ej7NYu-huVjA5TwLPTb_7xTblnD4ghQG cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 ```
 
 Sign-in opens in the system browser (an in-app sheet on iOS) and returns
@@ -253,13 +263,16 @@ flowchart LR
   semitones, a transpose; off, it sweeps smoothly with Shift-drag for fine
   control), Tonality (1-20 kHz, the
   frequency above which the input bypasses the shifter, which keeps pick
-  noise and string squeak natural; Off at the top) and Buffer (the engine's
+  noise and string squeak natural; Off at the top), Buffer (the engine's
   delay buffer, 20 / 30 / 40 / 60 ms; the tap's delay sweeps between a 2 ms
   floor and the buffer end, so the latency reported to the host is the
-  midpoint, 11 / 16 / 21 / 31 ms). Power, Buffer and Tonality changes blend over
-  25 ms like the stereo image's, never click. The engine is a time-domain
-  correlation-spliced delay line with onset re-sync, so pick attacks pass
-  in a few ms whatever the buffer; the buffer sets the lowest note it holds
+  midpoint, 11 / 16 / 21 / 31 ms) and Mix (the dry/shifted blend, 100% by
+  default; lower it to mix the dry signal back in, held by the floor so it
+  lands with the attacks). Power, Buffer, Tonality
+  and Mix changes blend over 25 ms like the stereo image's, never click. The
+  engine is a time-domain correlation-spliced delay line with onset re-sync,
+  so pick attacks pass in a few ms whatever the buffer; the buffer sets the
+  lowest note it holds
   a full period of (20 ms is guitar-only, 30 ms, the default, covers bass)
   and how often it splices. Two octaves up is as clean as one; two octaves
   down is on pitch but grainy, a sub-octave effect rather than a clean

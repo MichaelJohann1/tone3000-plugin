@@ -11,6 +11,8 @@ const std::vector<MappableTarget>& mappableTargets() {
         // programmed with CC / note buttons instead of program changes.
         {"presetPrevious", "Previous Preset", "Presets", K::trigger},
         {"presetNext", "Next Preset", "Presets", K::trigger},
+        // Virtual: opens / closes the tuner screen.
+        {"tuner", "Tuner", "Global", K::toggle},
         {"inputLevel", "Input Gain", "Global", K::continuous},
         {"outputLevel", "Output Level", "Global", K::continuous},
         {"outputBalance", "Output Balance", "Global", K::continuous},
@@ -25,6 +27,7 @@ const std::vector<MappableTarget>& mappableTargets() {
         {"pitchSemitones", "Pitch", "Pitch Shift", K::continuous},
         {"pitchStep", "Pitch Step", "Pitch Shift", K::toggle},
         {"pitchTonality", "Pitch Tonality", "Pitch Shift", K::continuous},
+        {"pitchMix", "Pitch Mix", "Pitch Shift", K::continuous},
         {"toneEqEnabled", "Tone Stack Power", "Tone Stack", K::toggle},
         {"toneBass", "Bass", "Tone Stack", K::continuous},
         {"toneMid", "Mid", "Tone Stack", K::continuous},

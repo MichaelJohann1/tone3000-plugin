@@ -26,6 +26,8 @@ public:
     virtual ~Listener() = default;
     virtual void audioDeviceChanged() {}
     virtual void midiMapChanged() {}
+    // A MIDI control mapped to the tuner fired: open or close the screen.
+    virtual void tunerToggleRequested() {}
   };
   void addListener(Listener* l) { listeners.add(l); }
   void removeListener(Listener* l) { listeners.remove(l); }
@@ -75,6 +77,7 @@ public:
   // Per-block params / EQ / spectrum
   virtual bool setBlockParam(const std::string& blockId, const juce::String& param, double value) = 0;
   virtual bool setBlockSlimSize(const std::string& blockId, double slimSize) = 0;
+  virtual bool setBlockIrStereo(const std::string& blockId, bool stereo) = 0;
   virtual bool setBlockEqBand(const std::string& blockId, int bandIndex, const juce::var& band) = 0;
   virtual bool setBlockEqEnabled(const std::string& blockId, bool enabled) = 0;
   virtual bool setBlockEqPre(const std::string& blockId, bool pre) = 0;
@@ -119,6 +122,7 @@ public:
   // Meters / tuner / auto-measure
   virtual juce::var getMeterLevels() = 0;
   virtual void setTunerEnabled(bool enabled) = 0;
+  virtual void setTunerMuted(bool muted) = 0;
   virtual juce::var getTunerReading() = 0;
   virtual void startAutoBalance() = 0;
   virtual void cancelAutoBalance() = 0;

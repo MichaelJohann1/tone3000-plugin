@@ -21,6 +21,7 @@
 #include "core/Help.h"
 #include "core/KnobScale.h"
 #include "core/Labels.h"
+#include "core/MidiCatalog.h"
 #include "core/Pitch.h"
 #include "core/RichText.h"
 #include "core/TextFlow.h"
@@ -40,6 +41,7 @@
 #include "views/Faceplate.h"
 #include "views/HintBar.h"
 #include "views/PluginHeader.h"
+#include "views/PresetBar.h"
 #include "views/block/BlockCard.h"
 #include "views/block/BlockDetail.h"
 #include "views/browser/FilterChip.h"
@@ -773,6 +775,23 @@ struct Tone3000SessionTests : juce::UnitTest {
     expect(!ears.sawScreen);  // never showed the page
     expectEquals(deviceRequests(), 0);
 
+    beginTest("a loopback that will not bind falls back to the device code");
+    session.logout();
+    http.sent.clear();
+    auto unbound = config;
+    unbound.signInViaApp = false;
+    unbound.loopbackAddress = "192.0.2.1";  // TEST-NET-1: on no interface
+    Tone3000Session desktop(backend, plugin.prefs, http, unbound);
+    desktop.login(ToneSession::LoginIntent::plain);
+    const auto& fallback = desktop.authFlow();
+    expect(fallback.phase == Phase::leaving && !fallback.deviceOnly);
+    expect(fallback.device && fallback.device->state == DeviceState::waiting);
+    expect(fallback.authorizeUrl.isEmpty());  // no listener, so no link to copy
+    expectEquals(deviceRequests(), 1);
+    approved = true;
+    pump(1500);
+    expect(desktop.authenticated() && fallback.phase == Phase::idle);
+
     session.removeListener(&ears);
     file.deleteFile();
   }
@@ -1446,7 +1465,8 @@ struct FocusPolicyTests : juce::UnitTest {
     inputMode->grabKeyboardFocus();
     expect(focused() == inputMode);
     expect(key(*peer, juce::KeyPress::returnKey));  // Enter presses the button
-    pump(30);
+    // The press is a posted message, and a slow paint ahead of it outlasts a fixed pump.
+    for (int i = 0; i < 300 && dynamic_cast<Popover*>(focused()) == nullptr; ++i) pump(10);
     auto* menu = dynamic_cast<Popover*>(focused());
     expect(menu != nullptr);
     if (menu != nullptr) {
@@ -2621,8 +2641,10 @@ struct ScrollSurfacesTests : juce::UnitTest {
     if (range() <= DragScroller::kKeyLineStep) return;
     const auto pos = [&] { return vertical ? scroller->getViewPositionY() : scroller->getViewPositionX(); };
     const auto rewind = [&] {
-      live.pump(500);  // any drag's momentum has run out
-      scroller->setViewPosition(0, 0);
+      for (int still = 0; still < 500; still += 10) {  // a drag's momentum outlasts any fixed wait on a slow machine
+        live.pump(10);
+        if (pos() != 0) scroller->setViewPosition(0, 0), still = 0;
+      }
     };
     const auto along = [&](float d) { return vertical ? juce::Point<float>(0.0f, d) : juce::Point<float>(d, 0.0f); };
     const auto inView = [&](const juce::Component& c) {
@@ -3245,6 +3267,271 @@ struct BlockSizeToggleTests : juce::UnitTest {
   }
 };
 
+// The block card's "=" button shows when the card opens with Per-Block
+// Normalization on, and follows the setting while open (issue #269).
+struct BlockNormalizeControlTests : juce::UnitTest {
+  BlockNormalizeControlTests() : juce::UnitTest("Block normalize control", "ui") {}
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  static Clickable* named(juce::Component& root, const juce::String& name) {
+    return dynamic_cast<Clickable*>(drive::find(root, [&](juce::Component& c) {
+      auto* b = dynamic_cast<Clickable*>(&c);
+      return b != nullptr && b->accessibleName() == name && c.isShowing()
+             && c.findParentComponentOfClass<BlockCard>() != nullptr;
+    }));
+  }
+  static Clickable* button(juce::Component& root) { return named(root, "Normalize"); }
+
+  // The scenario with the setting already saved.
+  static Scenario withSetting(const Scenario& base, bool on) {
+    Scenario copy{base.id, base.data.clone(), base.hasDrive};
+    auto* storage = new juce::DynamicObject();
+    storage->setProperty(UiPrefs::kShowBlockNormalizeControl, on ? "true" : "false");
+    copy.data.getDynamicObject()->setProperty("localStorage", juce::var(storage));
+    return copy;
+  }
+
+  void runTest() override {
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* detail = fixtures.find("main-detail");
+    if (detail == nullptr) {
+      expect(false, "main-detail scenario missing");
+      return;
+    }
+
+    beginTest("a card opened with the setting on shows the button, beside the Out knob");
+    {
+      MockBackend backend(detail->data);
+      juce::DocumentWindow window("block normalize", juce::Colours::black, 0);
+      ScaledHost host(backend, withSetting(*detail, true), fixtures.root);
+      window.setContentNonOwned(&host, true);
+      window.setVisible(true);
+      pump(400);
+      auto& root = host.pluginRoot();
+      auto* card = dynamic_cast<BlockCard*>(
+          drive::find(root, [](juce::Component& c) { return dynamic_cast<BlockCard*>(&c) != nullptr; }));
+      expect(card != nullptr);
+      if (card == nullptr) return;
+      auto* normalize = button(root);
+      expect(normalize != nullptr);
+      if (normalize != nullptr) {
+        // Laid out in the card's bottom-right corner.
+        const auto inCard = card->getLocalArea(normalize, normalize->getLocalBounds());
+        expect(!inCard.isEmpty() && card->getLocalBounds().contains(inCard));
+        expect(inCard.getCentreX() > card->getWidth() / 2 && inCard.getCentreY() > card->getHeight() / 2);
+      }
+
+      beginTest("the button follows the setting while the card is open");
+      root.services().prefs.setBool(UiPrefs::kShowBlockNormalizeControl, false);
+      pump(30);
+      expect(button(root) == nullptr);
+      root.services().prefs.setBool(UiPrefs::kShowBlockNormalizeControl, true);
+      pump(30);
+      expect(button(root) != nullptr);
+
+      beginTest("the EQ view hides it and the tone view brings it back");
+      auto* eq = named(root, "EQ");
+      expect(eq != nullptr);
+      if (eq == nullptr) return;
+      drive::click(root, *eq);
+      pump(30);
+      expect(button(root) == nullptr);
+      // A setting change must not show it over the EQ.
+      root.services().prefs.setBool(UiPrefs::kShowBlockNormalizeControl, false);
+      root.services().prefs.setBool(UiPrefs::kShowBlockNormalizeControl, true);
+      pump(30);
+      expect(button(root) == nullptr);
+      drive::click(root, *eq);
+      pump(30);
+      expect(button(root) != nullptr);
+      window.setVisible(false);
+    }
+
+    beginTest("a card opened with the setting off has no button");
+    {
+      MockBackend backend(detail->data);
+      juce::DocumentWindow window("block normalize", juce::Colours::black, 0);
+      ScaledHost host(backend, withSetting(*detail, false), fixtures.root);
+      window.setContentNonOwned(&host, true);
+      window.setVisible(true);
+      pump(400);
+      auto& root = host.pluginRoot();
+      expect(named(root, "EQ") != nullptr);  // the card is up
+      expect(button(root) == nullptr);
+      window.setVisible(false);
+    }
+  }
+};
+
+// An IR block's card shows whether the IR runs stereo or mono, and why. The
+// glyph is a button only where the choice is the user's, and the output
+// meter splits while an IR runs stereo (issue #122).
+struct IrImageTests : juce::UnitTest {
+  IrImageTests() : juce::UnitTest("IR stereo indicator", "ui") {}
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  static Clickable* button(juce::Component& root) {
+    return dynamic_cast<Clickable*>(drive::find(root, [](juce::Component& c) {
+      const auto help = c.getHelpText();
+      return dynamic_cast<Clickable*>(&c) != nullptr && c.isShowing() &&
+             (help.startsWith("Stereo IR") || help.startsWith("Mono IR")) &&
+             c.findParentComponentOfClass<BlockCard>() != nullptr;
+    }));
+  }
+
+  static bool meterSplit(juce::Component& root) {
+    auto* out = dynamic_cast<DbMeter*>(
+        drive::find(root, [](juce::Component& c) { return c.getName() == "output meter"; }));
+    return out != nullptr && out->stereo();
+  }
+
+  // The ids of the Out meter columns the card shows, left to right.
+  static juce::String outColumns(juce::Component& root) {
+    juce::StringArray ids;
+    drive::find(root, [&](juce::Component& c) {
+      auto* m = dynamic_cast<LiveDotMeter*>(&c);
+      if (m != nullptr && c.isShowing() && m->id().contains(":out")) ids.add(m->id());
+      return false;
+    });
+    ids.sort(false);
+    return ids.joinIntoString("|");
+  }
+
+  // What the processor would report for the scenario's IR block (blk-3).
+  static void report(juce::var chain, const char* image) {
+    for (auto& block : *chain["chain"].getArray())
+      if (block["blockId"].toString() == "blk-3") block.getDynamicObject()->setProperty("irImage", image);
+    chain.getDynamicObject()->setProperty("stereoIrActive", juce::String(image) == "stereo");
+  }
+
+  static juce::String reported(MockBackend& backend) {
+    for (const auto& block : *backend.getChainState(-1)["chain"].getArray())
+      if (block["blockId"].toString() == "blk-3") return block["irImage"].toString();
+    return {};
+  }
+
+  // main-detail with the card open on `blockId` and the IR reporting `image`.
+  static Scenario opened(const Scenario& base, const char* blockId, const char* image) {
+    Scenario copy{base.id, base.data.clone(), base.hasDrive};
+    copy.data["sessionStorage"].getDynamicObject()->setProperty("t3k.detailBlockId", blockId);
+    report(copy.data["chain"], image);
+    return copy;
+  }
+
+  void runTest() override {
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* detail = fixtures.find("main-detail");
+    if (detail == nullptr) {
+      expect(false, "main-detail scenario missing");
+      return;
+    }
+
+    {
+      const auto scenario = opened(*detail, "blk-3", "stereo");
+      MockBackend backend(scenario.data);
+      juce::DocumentWindow window("ir stereo", juce::Colours::black, 0);
+      ScaledHost host(backend, scenario, fixtures.root);
+      window.setContentNonOwned(&host, true);
+      window.setVisible(true);
+      pump(400);
+      auto& root = host.pluginRoot();
+
+      beginTest("a stereo IR shows a lit button and splits the output meter");
+      auto* stereo = button(root);
+      expect(stereo != nullptr);
+      if (stereo == nullptr) return;
+      expectEquals(stereo->getHelpText(), help::text(help::Key::irStereo));
+      expect(stereo->isEnabled());
+      expect(meterSplit(root));
+      expectEquals(outColumns(root), juce::String("block:blk-3:out:l|block:blk-3:out:r"));
+
+      beginTest("a click picks mono, and the meters go back to one column");
+      drive::click(root, *stereo);
+      pump(30);
+      expectEquals(reported(backend), juce::String("mono-user"));
+      expectEquals(stereo->getHelpText(), help::text(help::Key::irMonoUser));
+      expect(stereo->isEnabled());
+      expect(!meterSplit(root));
+      expectEquals(outColumns(root), juce::String("block:blk-3:out"));
+
+      beginTest("a second click brings stereo back");
+      drive::click(root, *stereo);
+      pump(30);
+      expectEquals(reported(backend), juce::String("stereo"));
+      expectEquals(stereo->getHelpText(), help::text(help::Key::irStereo));
+      expect(meterSplit(root));
+      expectEquals(outColumns(root), juce::String("block:blk-3:out:l|block:blk-3:out:r"));
+
+      beginTest("Spread on: the IR reads mono, names Spread, and has no choice to make");
+      auto* spread = root.services().backend.parameter("spreadEnabled");
+      spread->setValueNotifyingHost(1.0f);
+      pump(30);
+      expectEquals(stereo->getHelpText(), help::text(help::Key::irMonoSpread));
+      expect(!stereo->isEnabled());
+      expectEquals(outColumns(root), juce::String("block:blk-3:out"));
+      drive::click(root, *stereo);
+      pump(30);
+      expectEquals(reported(backend), juce::String("stereo"));
+      spread->setValueNotifyingHost(0.0f);
+      pump(30);
+      expectEquals(stereo->getHelpText(), help::text(help::Key::irStereo));
+      expect(stereo->isEnabled());
+
+      beginTest("a mono reason from the chain or the rig is display only");
+      const std::pair<const char*, help::Key> reasons[] = {
+          {"mono-file", help::Key::irMonoFile},
+          {"mono-nam-after", help::Key::irMonoNamAfter},
+          {"mono-stereo-chains", help::Key::irMonoStereoChains},
+          {"mono-dual-mono", help::Key::irMonoDualMono},
+          {"mono-output", help::Key::irMonoOutput},
+      };
+      for (const auto& [image, key] : reasons) {
+        auto chain = backend.getChainState(-1);
+        report(chain, image);
+        backend.setChain(chain);
+        // The store sees the chain on a clock tick, which a slow runner can hold past a fixed pump.
+        LiveScenario::until([&] { return stereo->getHelpText() == help::text(key); });
+        expectEquals(stereo->getHelpText(), help::text(key), image);
+        expect(!stereo->isEnabled(), image);
+        drive::click(root, *stereo);
+        pump(30);
+        expectEquals(reported(backend), juce::String(image));
+        expect(!meterSplit(root), image);
+      }
+      window.setVisible(false);
+    }
+
+    beginTest("a block's output level parses per channel, or as one value for both");
+    {
+      const auto levels = MeterLevels::parse(juce::JSON::parse(
+          R"({"blocks": {"a": {"in": -20, "out": -6, "outLR": [-6, -12]}, "b": {"in": -20, "out": -9}}})"));
+      expectEquals(static_cast<int>(levels.blocks.size()), 2);
+      if (levels.blocks.size() != 2) return;
+      expectEquals(levels.blocks[0].outLR[0], -6.0f);
+      expectEquals(levels.blocks[0].outLR[1], -12.0f);
+      expectEquals(levels.blocks[1].outLR[0], -9.0f);
+      expectEquals(levels.blocks[1].outLR[1], -9.0f);
+    }
+
+    beginTest("a NAM block has no stereo/mono button");
+    {
+      const auto scenario = opened(*detail, "blk-2", "stereo");
+      MockBackend backend(scenario.data);
+      juce::DocumentWindow window("ir stereo", juce::Colours::black, 0);
+      ScaledHost host(backend, scenario, fixtures.root);
+      window.setContentNonOwned(&host, true);
+      window.setVisible(true);
+      pump(400);
+      auto& root = host.pluginRoot();
+      expect(drive::find(root, [](juce::Component& c) { return dynamic_cast<BlockCard*>(&c) != nullptr; }) != nullptr);
+      expect(button(root) == nullptr);
+      window.setVisible(false);
+    }
+  }
+};
+
 // Committing a typed CC number swaps the listening row for a mapping row of
 // the same height. The form host only re-flows on a height change, so the
 // card has to place its new rows itself or they sit at 0×0 and the card
@@ -3319,6 +3606,145 @@ struct MidiMapCommitTests : juce::UnitTest {
     expect(state && state->mappings.empty());
     expect(named(root, "Remove") == nullptr);
     window.setVisible(false);
+  }
+};
+
+// The tuner's speaker toggle: each click flips the backend mute and swaps the
+// button's name (its accessible title), and the choice is saved, so the
+// tuner reopens the way it was left.
+struct TunerMuteTests : juce::UnitTest {
+  TunerMuteTests() : juce::UnitTest("Tuner mute", "ui") {}
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  static juce::Button* named(juce::Component& root, const juce::String& name) {
+    return dynamic_cast<juce::Button*>(
+        drive::find(root, [&](juce::Component& c) { return c.getName() == name && c.isShowing(); }));
+  }
+
+  void runTest() override {
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* scenario = fixtures.find("main-stereo");
+    if (scenario == nullptr) {
+      expect(false, "main-stereo scenario missing");
+      return;
+    }
+    MockBackend backend(scenario->data);
+    juce::DocumentWindow window("tuner mute", juce::Colours::black, 0);
+    ScaledHost host(backend, *scenario, fixtures.root);
+    window.setContentNonOwned(&host, true);
+    window.setVisible(true);
+    pump(400);
+    auto& root = host.pluginRoot();
+    root.setTunerShown(true);
+    pump(100);
+
+    beginTest("the tuner opens unmuted");
+    auto* mute = named(root, "Mute output");
+    expect(mute != nullptr, "no mute toggle on the tuner");
+    if (mute == nullptr) return;
+    expect(!backend.tunerMuted());
+
+    beginTest("a click mutes, and the toggle offers to unmute");
+    mute->onClick();
+    expect(backend.tunerMuted());
+    expect(named(root, "Mute output") == nullptr);
+    expect(named(root, "Unmute output") == mute);
+
+    beginTest("a second click unmutes");
+    mute->onClick();
+    expect(!backend.tunerMuted());
+    expect(named(root, "Mute output") == mute);
+
+    beginTest("closing a muted tuner brings the output back");
+    mute->onClick();
+    root.setTunerShown(false);
+    pump(50);
+    expect(!backend.tunerMuted());
+
+    beginTest("a reopened tuner is still muted");
+    root.setTunerShown(true);
+    pump(100);
+    expect(backend.tunerMuted());
+    auto* unmute = named(root, "Unmute output");
+    expect(unmute != nullptr);
+    if (unmute == nullptr) return;
+
+    beginTest("unmuting is kept the same way");
+    unmute->onClick();
+    root.setTunerShown(false);
+    pump(50);
+    root.setTunerShown(true);
+    pump(100);
+    expect(!backend.tunerMuted());
+    expect(named(root, "Mute output") != nullptr);
+    window.setVisible(false);
+
+    beginTest("a new editor opens the tuner muted too");
+    Scenario saved{scenario->id, scenario->data.clone(), scenario->hasDrive};
+    auto* storage = new juce::DynamicObject();
+    storage->setProperty(UiPrefs::kTunerMuted, "true");
+    saved.data.getDynamicObject()->setProperty("localStorage", juce::var(storage));
+    MockBackend nextBackend(saved.data);
+    ScaledHost nextHost(nextBackend, saved, fixtures.root);
+    nextHost.pluginRoot().setTunerShown(true);
+    pump(100);
+    expect(nextBackend.tunerMuted());
+  }
+};
+
+// The preset browser's "PC n" label gets a box at least as wide as its text;
+// a narrower one draws as "PC…" (issue #257).
+struct PresetPcLabelTests : juce::UnitTest {
+  PresetPcLabelTests() : juce::UnitTest("Preset PC label", "ui") {}
+
+  void runTest() override {
+    beginTest("every program number fits its label");
+    for (int pc = 0; pc < 128; ++pc) {
+      const auto text = Fonts::width(Fonts::mono(PresetBar::kPcLabelPx), "PC " + juce::String(pc));
+      expect(static_cast<float>(PresetBar::pcLabelWidth(pc)) >= text, "PC " + juce::String(pc));
+    }
+  }
+};
+
+// A MIDI control mapped to the tuner opens and closes the tuner screen, and
+// leaves Settings to show it.
+struct TunerMidiToggleTests : juce::UnitTest {
+  TunerMidiToggleTests() : juce::UnitTest("Tuner MIDI toggle", "ui") {}
+
+  static void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+
+  void runTest() override {
+    const auto fixtures = Fixtures::load(fixturesDir().getChildFile("scenarios.json"));
+    const auto* scenario = fixtures.find("main-mono");
+    if (scenario == nullptr) {
+      expect(false, "main-mono scenario missing");
+      return;
+    }
+    MockBackend backend(scenario->data);
+    ScaledHost host(backend, *scenario, fixtures.root);
+    pump(100);
+    auto& root = host.pluginRoot();
+
+    beginTest("the tuner is a mappable toggle");
+    const auto* target = midi::targetById("tuner");
+    expect(target != nullptr && target->kind == midi::TargetKind::toggle);
+
+    beginTest("each press opens or closes the tuner");
+    expect(!root.tunerShown());
+    backend.fireTunerToggle();
+    expect(root.tunerShown());
+    backend.fireTunerToggle();
+    expect(!root.tunerShown());
+
+    beginTest("opening it from Settings closes Settings");
+    root.openSettings();
+    pump(50);
+    expect(root.settings() != nullptr);
+    backend.fireTunerToggle();
+    pump(50);
+    expect(root.tunerShown());
+    expect(root.settings() == nullptr);
   }
 };
 
@@ -3935,7 +4361,12 @@ GlowCornerTests glowCornerTests;
 PresetReorderTests presetReorderTests;
 ChainCrossLaneDragTests chainCrossLaneDragTests;
 BlockSizeToggleTests blockSizeToggleTests;
+BlockNormalizeControlTests blockNormalizeControlTests;
+IrImageTests irImageTests;
 MidiMapCommitTests midiMapCommitTests;
+TunerMuteTests tunerMuteTests;
+TunerMidiToggleTests tunerMidiToggleTests;
+PresetPcLabelTests presetPcLabelTests;
 KnobReadoutTests knobReadoutTests;
 FaceplateEffectsTests faceplateEffectsTests;
 FaceplateDualMonoTests faceplateDualMonoTests;

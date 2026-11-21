@@ -16,7 +16,7 @@ enum class Key {
   inputModeRight, outputLevel, outputBalance, autoBalance,
   // Faceplate: gate, pitch shift, tone stack, stereo image (spread / align)
   gate, gatePower, gateRelease, gateHold, gateRange,
-  pitch, pitchPower, pitchStep, pitchTonality, pitchWindow,
+  pitch, pitchPower, pitchStep, pitchTonality, pitchWindow, pitchMix,
   toneBass, toneMiddle, toneTreble, tonePower,
   spreadOffset, spreadWobble, spreadWobblePower, spreadCrossover, spreadCrossoverPower,
   spreadDiffuse, spreadAdvert, spreadPower, imageCorrelation, spreadMonoOutput, spreadDualMono,
@@ -39,6 +39,8 @@ enum class Key {
   soloRight, invertLeft, invertRight, swapChains, branchGap, branchJunction,
   // Block card
   blockIn, blockOut, blockOutIr, blockMix, blockNormalize, blockNormalizeOverridden, blockSize,
+  irStereo, irMonoUser, irMonoFile, irMonoNamAfter, irMonoStereoChains, irMonoDualMono, irMonoOutput,
+  irMonoSpread,
   blockSizeChip, blockCalibrated, blockUncalibrated, eqToggle, toneInfo, toneInfoLogin, viewOnT3k,
   favoriteTone, unfavoriteTone, eqSlidersView, eqCurveView, eqReset, eqPre, eqPower, shareTone,
   modelSelectSignedOut, backToChain,

@@ -1,6 +1,7 @@
 #include "PresetBar.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/Fonts.h"
 #include "core/DelayedCall.h"
@@ -417,11 +418,8 @@ public:
     if (active_)
       Icons::draw(g, Icon::Check, juce::Rectangle<float>(14, 14).withCentre(check.toFloat().getCentre()),
                   theme::kWhite);
-    if (pc_) {
-      const auto font = Fonts::mono(11);
-      const auto label = "PC " + juce::String(*pc_);
-      paint::text(g, label, pcArea_, font, kMutedText);
-    }
+    if (pc_)
+      paint::text(g, "PC " + juce::String(*pc_), pcArea_, Fonts::mono(kPcLabelPx), kMutedText);
   }
 
   void resized() override {
@@ -436,9 +434,7 @@ public:
     if (trash_) takeRight(*trash_);
     if (pencil_) takeRight(*pencil_);
     if (pc_) {
-      const auto font = Fonts::mono(11);
-      const int w = juce::roundToInt(Fonts::width(font, "PC " + juce::String(*pc_)));
-      pcArea_ = area.removeFromRight(w);
+      pcArea_ = area.removeFromRight(pcLabelWidth(*pc_));
       area.removeFromRight(8);
     }
     if (rename_) rename_->setBounds(area.withSizeKeepingCentre(area.getWidth(), 25));
@@ -813,6 +809,11 @@ void PresetBar::loadAndClose(const juce::String& id) {
   if (beforeLoad) beforeLoad();
   const bool loaded = services_.presets.load(presetId);
   help::announce((loaded ? "Preset selected: " : "Could not load preset: ") + presetName);
+}
+
+int PresetBar::pcLabelWidth(int pc) {
+  // Rounded up: a box narrower than the text draws as "PC…".
+  return static_cast<int>(std::ceil(Fonts::width(Fonts::mono(kPcLabelPx), "PC " + juce::String(pc))));
 }
 
 void PresetBar::openSavePanel() {

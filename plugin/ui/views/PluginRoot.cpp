@@ -102,6 +102,7 @@ PluginRoot::PluginRoot(Services& services)
   services_.connection.addListener(this);
   services_.updates.addListener(this);
   services_.session.addListener(this);
+  services_.backend.addListener(this);
   hintsVisible_ = services_.hints.enabled();
   updateChromeHeight();
   bannerChanged();
@@ -124,6 +125,7 @@ PluginRoot::~PluginRoot() {
   services_.session.onAuthenticated = nullptr;
   services_.loadFlow.onShowBrowser = nullptr;
   if (watchedParent_ != nullptr) watchedParent_->removeComponentListener(this);
+  services_.backend.removeListener(this);
   services_.session.removeListener(this);
   services_.updates.removeListener(this);
   services_.connection.removeListener(this);
@@ -264,7 +266,7 @@ void PluginRoot::sessionChanged() {
   const auto& session = services_.session;
   const auto user = session.user();
   const juce::String name = user ? user->name() : juce::String();
-  if (auto* account = findDescendant<AccountMenu>(header_)) account->setUserName(name);
+  if (auto* account = findDescendant<AccountMenu>(header_)) account->setDisplayName(name);
   if (session.authenticated() && announceSignIn_) {
     announceSignIn_ = false;
     help::announce(name.isNotEmpty() ? "Signed in as " + name : juce::String("Signed in"));
@@ -621,6 +623,13 @@ void PluginRoot::setTunerShown(bool shown) {
   else if (!shown && header_.isShowing()) {
     header_.focusTunerButton();
   }
+}
+
+// The MIDI-mapped tuner control.
+void PluginRoot::tunerToggleRequested() {
+  // Settings covers the whole window: close it so the tuner shows.
+  if (!tunerShown()) closeSettings();
+  setTunerShown(!tunerShown());
 }
 
 void PluginRoot::setBrowserShown(bool shown) {

@@ -168,6 +168,7 @@ void TONE3000Processor::resolveParamRefs() {
   paramRefs.pitchStep = get("pitchStep");
   paramRefs.pitchTonality = get("pitchTonality");
   paramRefs.pitchWindow = get("pitchWindow");
+  paramRefs.pitchMix = get("pitchMix");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createParameterLayout() {
@@ -370,6 +371,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createPar
       juce::ParameterID{"pitchWindow", 43}, "pitchWindow", windows,
       static_cast<int>(PitchShift::kDefaultWindow),
       juce::AudioParameterChoiceAttributes().withAutomatable(false)));
+  // Dry/wet Mix: the same linear blend as a block's Mix (0 = dry, 1 = the
+  // pure shift, the default), so the dry signal can be mixed back in.
+  layout.add(normParam("pitchMix", 44, 1.0f));
 
   return layout;
 }
@@ -947,9 +951,11 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     chainEditFadeDone.store(true);
 
   // Output-stage gain, primed from the current parameters so a restored
-  // session doesn't glide in from the wrong level.
+  // session doesn't glide in from the wrong level, and from the tuner mute so
+  // a re-prepare while muted (rate / buffer change, device switch) doesn't
+  // blast the output for the glide down.
   outputGainSmoother.reset(sampleRate, 0.02);
-  outputGainSmoother.setCurrentAndTargetValue(mainStageGain(cacheOutputLevel));
+  outputGainSmoother.setCurrentAndTargetValue(tunerMuteActive() ? 0.0f : mainStageGain(cacheOutputLevel));
 
   // Post-chain image matrix (balance × pan, or the mono fold): 20 ms ramps,
   // primed from the current parameters and rig so a restored session doesn't
@@ -1162,6 +1168,7 @@ void TONE3000Processor::updateCachedParameters() {
   cachePitch.tonalityHz = tonalityHz < PitchShift::kTonalityOffHz ? tonalityHz : 0.0f;
   cachePitch.window =
       PitchShift::windowFromIndex(static_cast<int>(std::lround(paramRefs.pitchWindow->load())));
+  cachePitch.mix = paramRefs.pitchMix->load();
 }
 
 // ##########################
@@ -1222,7 +1229,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // Not processing: park the block's meters at the floor. The EQ view can
       // still be open, so keep its analyzer fed with the pass-through audio.
       block->inputMeterDb.store(-60.0f);
-      block->outputMeterDb.store(-60.0f);
+      block->outputMeterDbL.store(-60.0f);
+      block->outputMeterDbR.store(-60.0f);
       if (block->spectrum.isEnabled())
         block->spectrum.pushSamples(buffer.getReadPointer(0),
                                     numChannels > 1 ? buffer.getReadPointer(1) : nullptr,
@@ -1352,7 +1360,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
           if (!std::isfinite(modelLoudnessDb) || modelLoudnessDb < -100.0f || modelLoudnessDb > 0.0f) {
             modelLoudnessDb = targetLufs;
           }
-          const float gainAdjustmentDb = juce::jlimit(-12.0f, 12.0f, targetLufs - modelLoudnessDb);
+          // Safety limit only, against wild loudness metadata.
+          const float gainAdjustmentDb = juce::jlimit(-24.0f, 24.0f, targetLufs - modelLoudnessDb);
           blockGain = juce::Decibels::decibelsToGain(gainAdjustmentDb);
         }
         block->namNormalizationSmoother.setTargetValue(blockGain);
@@ -1387,9 +1396,11 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // left channel to every audio channel (convolverMono, Stereo::no). Dual mono always
         // takes the mono path: each channel is its own mono chain, and inside a stereo-mode
         // lane (the definition of dual mono) a stereo IR convolves its left channel too.
+        // getChainState reports the same rule per block (irImage).
         const bool noNamAfter = (idx > lastNamIndex);
         const bool useStereoIr = block->irNumChannels > 1 && numChannels > 1 && noNamAfter &&
-                                 !rtDualMono && block->convolverStereo != nullptr;
+                                 !rtDualMono && block->irStereoEnabled &&
+                                 block->convolverStereo != nullptr;
         auto& convolver = useStereoIr ? *block->convolverStereo : *block->convolverMono;
 
         // Convolution runs at the base rate inside the block's island: when
@@ -1453,7 +1464,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     block->outputGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(gainDb));
     block->mixSmoother.setTargetValue(juce::jlimit(0.0f, 1.0f, block->mixNormalized));
 
-    float blockOutputPeak = 0.0f;
+    float blockOutputPeakL = 0.0f, blockOutputPeakR = 0.0f;
     for (int i = 0; i < numSamples; ++i) {
       // wetFadeGain rides the mix (bypass-bound glides crossfade toward
       // dry) and glides the post-mix Out Gain to unity in step, so a
@@ -1469,12 +1480,12 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       float wetL = buffer.getWritePointer(0)[i] * wetGain;
       float dryL = dryScratch.getReadPointer(0)[i];
       buffer.getWritePointer(0)[i] = (dryL * (1.0f - m) + wetL * m) * postGain;
-      blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(0)[i]));
+      blockOutputPeakL = std::max(blockOutputPeakL, std::abs(buffer.getWritePointer(0)[i]));
       if (numChannels > 1) {
         float wetR = buffer.getWritePointer(1)[i] * wetGain;
         float dryR = dryScratch.getReadPointer(1)[i];
         buffer.getWritePointer(1)[i] = (dryR * (1.0f - m) + wetR * m) * postGain;
-        blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(1)[i]));
+        blockOutputPeakR = std::max(blockOutputPeakR, std::abs(buffer.getWritePointer(1)[i]));
       }
     }
 
@@ -1490,9 +1501,11 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
 
     // Block output meter: post EQ + mix + Out Gain, i.e. what this block
     // hands to the next one in the chain.
-    const float blockOutputDb =
-        blockOutputPeak > 0.0f ? juce::Decibels::gainToDecibels(blockOutputPeak) : -60.0f;
-    block->outputMeterDb.store(std::max(-60.0f, blockOutputDb));
+    const auto peakDb = [](float peak) {
+      return peak > 0.0f ? std::max(-60.0f, juce::Decibels::gainToDecibels(peak)) : -60.0f;
+    };
+    block->outputMeterDbL.store(peakDb(blockOutputPeakL));
+    block->outputMeterDbR.store(peakDb(numChannels > 1 ? blockOutputPeakR : blockOutputPeakL));
 
     // Feed the EQ editor's analyzer with the block's final output, only while
     // that block's EQ view is actually open in the UI. In dual mono the two
@@ -2052,7 +2065,8 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   // meters ride the same pass.
   // ###########
   {
-    outputGainSmoother.setTargetValue(mainStageGain(cacheOutputLevel));
+    // The tuner mute rides the same glide: only honoured while the tuner is open.
+    outputGainSmoother.setTargetValue(tunerMuteActive() ? 0.0f : mainStageGain(cacheOutputLevel));
 
     float peakL = 0.0f, peakR = 0.0f;
     auto* l = buffer.getWritePointer(0);

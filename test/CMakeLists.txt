@@ -34,10 +34,12 @@ target_sources(DspTests PRIVATE
     src/host_program_tests.cpp
     src/ir_block_size_tests.cpp
     src/ir_classification_tests.cpp
+    src/ir_stereo_tests.cpp
     src/ir_temp_file_tests.cpp
     src/local_load_tests.cpp
     src/midi_map_tests.cpp
     src/multicore_tests.cpp
+    src/nam_normalize_tests.cpp
     src/outgain_tests.cpp
     src/padless_wav_tests.cpp
     src/pitch_shift_tests.cpp
@@ -47,6 +49,7 @@ target_sources(DspTests PRIVATE
     src/state_cache_tests.cpp
     src/swap_fade_tests.cpp
     src/tone_refresh_tests.cpp
+    src/tuner_mute_tests.cpp
     src/tuner_tests.cpp
     src/worker_pool_tests.cpp
     # Compiled straight from the plugin tree so the tests exercise the real

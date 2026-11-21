@@ -45,8 +45,9 @@ constexpr SliderDefault kSliders[] = {
     // normalised maps (KnobScale.h).
     {"gateRelease", 0.5f},       {"gateHold", 0.1f},      {"gateRange", 1.0f},
     // Pitch shift at 0 st (centre) with its deck at the defaults: tonality
-    // Off (top), the 30 ms buffer (second of four detents).
+    // Off (top), the 30 ms buffer (second of four detents), Mix fully shifted.
     {"pitchSemitones", 0.5f},    {"pitchTonality", 1.0f},  {"pitchWindow", 1.0f / 3.0f},
+    {"pitchMix", 1.0f},
 };
 struct ToggleDefault {
   const char* id;
@@ -212,6 +213,25 @@ bool MockBackend::setBlockSlimSize(const std::string& blockId, double slimSize) 
     }
   }
   return false;
+}
+
+// The processor's rule for a block that has the choice: the image follows
+// the setting, and the chain puts out stereo while any block runs stereo.
+bool MockBackend::setBlockIrStereo(const std::string& blockId, bool stereo) {
+  auto* blocks = chain_["chain"].getArray();
+  if (blocks == nullptr) return false;
+  bool found = false, anyStereo = false;
+  for (auto& block : *blocks) {
+    if (block["blockId"].toString().toStdString() == blockId) {
+      block.getDynamicObject()->setProperty("irImage", stereo ? "stereo" : "mono-user");
+      found = true;
+    }
+    anyStereo = anyStereo || block["irImage"].toString() == "stereo";
+  }
+  if (!found) return false;
+  chain_.getDynamicObject()->setProperty("stereoIrActive", anyStereo);
+  bumpChain();
+  return true;
 }
 
 bool MockBackend::moveBlockToChain(const std::string& blockId, const juce::String& side, int index) {

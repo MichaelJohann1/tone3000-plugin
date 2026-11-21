@@ -256,6 +256,10 @@ public:
   // dip the audio.
   bool setBlockSlimSize(const std::string& blockId, double slimSize);
 
+  // Per-block stereo/mono choice for a stereo IR (ChainBlock::irStereoEnabled).
+  // Chain state, undoable. Rides the chain-edit fade like setBlockSlimSize.
+  bool setBlockIrStereo(const std::string& blockId, bool stereo);
+
   // Default NAM A2 size for newly added blocks (machine-wide user setting,
   // like multi-core), in the same slimmable-size domain. Existing blocks
   // keep their own per-block size; this only stamps blocks as loadTone
@@ -483,7 +487,14 @@ public:
 
   // Tuner: enabled by the UI while the tuner screen is visible. Reads the raw
   // (pre-gain, pre-gate) input so gating never starves the pitch detector.
-  void setTunerEnabled(bool enabled) { tuner.setEnabled(enabled); }
+  // Closing the tuner also clears the mute, so the output can't stay silenced
+  // once the screen that offers the toggle is gone.
+  void setTunerEnabled(bool enabled) {
+    tuner.setEnabled(enabled);
+    if (!enabled) tunerMuted.store(false);
+  }
+  // Silences the output (faded) while the tuner screen is open; no effect otherwise.
+  void setTunerMuted(bool muted) { tunerMuted.store(muted); }
   juce::var getTunerReading() { return tuner.getReading(); }
 
   // Auto balance: one-shot chain energy match.
@@ -958,6 +969,12 @@ private:
   // of stepping once per block. Audio thread only.
   juce::SmoothedValue<float> outputGainSmoother;
 
+  // Tuner mute: UI-set flag, faded through outputGainSmoother in the output
+  // stage. Only honoured while the tuner is enabled (setTunerEnabled(false)
+  // clears it).
+  std::atomic<bool> tunerMuted{false};
+  bool tunerMuteActive() const { return tunerMuted.load() && tuner.isEnabled(); }
+
   // Monotonic revision of everything getChainState() reports. Bumped on every
   // chain mutation (structure, params, load completion, stereo/side changes)
   // so the UI can cheaply skip resyncs when nothing changed. Mutable + const:
@@ -1141,6 +1158,7 @@ private:
     std::atomic<float>* pitchStep = nullptr;
     std::atomic<float>* pitchTonality = nullptr;
     std::atomic<float>* pitchWindow = nullptr;
+    std::atomic<float>* pitchMix = nullptr;
   } paramRefs;
   void resolveParamRefs();
 
